@@ -17,7 +17,15 @@ server:
   tomcat:
     max-connections: 20000
     accept-count: 10000
+    # 바쁜 스레드 수 같은 Tomcat 지표를 내보낸다.
+    mbeanregistry:
+      enabled: true
   shutdown: graceful
+
+# 지표·상태 확인 주소는 사용자 요청과 다른 포트(8081)로 연다. nginx는 8080만 넘기므로 밖에서는 보이지 않는다.
+management:
+  server:
+    port: 8081
 
 coupon:
   kafka:

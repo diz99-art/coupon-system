@@ -1,5 +1,5 @@
 # 로컬 개발용 MySQL, Redis, Kafka. 비밀번호는 내 컴퓨터에서만 쓰는 개발용 값이다.
-# 서버 2대와 nginx는 cluster 프로필로 따로 켠다: docker compose --profile cluster up -d --build
+# 서버 2대, nginx, Prometheus, Grafana는 cluster 프로필로 따로 켠다: docker compose --profile cluster up -d --build
 services:
   mysql:
     image: mysql:8.4
@@ -75,7 +75,7 @@ services:
     cpus: 1.0
     mem_limit: 1g
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/v3/api-docs > /dev/null || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8081/actuator/health > /dev/null || exit 1"]
       interval: 5s
       timeout: 5s
       retries: 30
@@ -93,7 +93,7 @@ services:
     cpus: 1.0
     mem_limit: 1g
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/v3/api-docs > /dev/null || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8081/actuator/health > /dev/null || exit 1"]
       interval: 5s
       timeout: 5s
       retries: 30
@@ -118,6 +118,34 @@ services:
     depends_on:
       app1: { condition: service_healthy }
       app2: { condition: service_healthy }
+
+  # 모니터링. Prometheus가 앱 2대의 /actuator/prometheus를 주기적으로 가져가 저장하고, Grafana가 그래프로 보여준다.
+  prometheus:
+    profiles: ["cluster"]
+    image: prom/prometheus:v3.15.0
+    container_name: coupon-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+
+  # http://localhost:3000 (로그인 없이 보기, 편집은 admin/admin). 데이터 소스와 대시보드는 파일에서 자동으로 불러온다.
+  grafana:
+    profiles: ["cluster"]
+    image: grafana/grafana:13.2.2
+    container_name: coupon-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/coupon.json
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      - prometheus
 
 volumes:
   mysql-data:

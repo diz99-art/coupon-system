@@ -2,10 +2,12 @@ package com.coupon.coupon.service;
 
 import com.coupon.coupon.domain.Coupon;
 import com.coupon.coupon.messaging.CouponIssueMessage;
+import com.coupon.coupon.metrics.CouponMetrics;
 import com.coupon.coupon.repository.CouponIssueRedisRepository;
 import com.coupon.coupon.repository.CouponIssueRepository;
 import com.coupon.coupon.repository.CouponRepository;
 import com.coupon.coupon.domain.CouponIssue;
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.Map;
@@ -29,19 +31,22 @@ public class CouponReconciliationService {
 	private final CouponIssueRepository couponIssueRepository;
 	private final CouponIssueRedisRepository couponIssueRedisRepository;
 	private final CouponIssueSaver couponIssueSaver;
+	private final CouponMetrics couponMetrics;
 	private final long graceMillis;
 
 	public CouponReconciliationService(CouponRepository couponRepository, CouponIssueRepository couponIssueRepository,
 			CouponIssueRedisRepository couponIssueRedisRepository, CouponIssueSaver couponIssueSaver,
-			@Value("${coupon.reconcile.grace-ms}") long graceMillis) {
+			CouponMetrics couponMetrics, @Value("${coupon.reconcile.grace-ms}") long graceMillis) {
 		this.couponRepository = couponRepository;
 		this.couponIssueRepository = couponIssueRepository;
 		this.couponIssueRedisRepository = couponIssueRedisRepository;
 		this.couponIssueSaver = couponIssueSaver;
+		this.couponMetrics = couponMetrics;
 		this.graceMillis = graceMillis;
 	}
 
 	public Result reconcile() {
+		long start = System.nanoTime();
 		int savedToDb = 0;
 		int restoredToRedis = 0;
 		LocalDateTime settledBefore = LocalDateTime.now().minusNanos(graceMillis * 1_000_000);
@@ -64,6 +69,7 @@ public class CouponReconciliationService {
 			couponIssueRedisRepository.restore(coupon.getId(), missingInRedis);
 			restoredToRedis += missingInRedis.size();
 		}
+		couponMetrics.reconciled(savedToDb, restoredToRedis, Duration.ofNanos(System.nanoTime() - start));
 		if (savedToDb > 0 || restoredToRedis > 0) {
 			log.warn("대사 보정: DB에 저장 {}건, Redis에 복구 {}건", savedToDb, restoredToRedis);
 		}

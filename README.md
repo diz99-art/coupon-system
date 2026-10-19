@@ -6,7 +6,7 @@
 - 실행: `docker compose up -d` → `./gradlew bootRun` (local 프로필, 켤 때마다 DB 테이블과 Redis 쿠폰 키 초기화)
 - API 문서: 서버 실행 후 http://localhost:8080/swagger-ui.html
 - 테스트: `./gradlew test` (`docker compose up -d`로 MySQL, Redis, Kafka가 떠 있어야 한다)
-- 서버 2대 + nginx: `docker compose --profile cluster up -d --build` → 부하 테스트 `bench/all.sh` (6단계)
+- 서버 2대 + nginx + Prometheus·Grafana: `docker compose --profile cluster up -d --build` → 부하 테스트 `bench/all.sh` (6단계), 대시보드 http://localhost:3000 (7단계)
 
 ## API
 
@@ -517,3 +517,139 @@ Kafka 전송은 `@MockitoBean`으로 바꿔서 테스트가 메시지를 실제�
 > DB 비관적 락과 Redisson 분산 락은 2대에서도 정확했지만, 모든 요청이 락 하나 앞에 줄을 서서 서버를 늘려도 처리량이 1.35배, 1.06배밖에 늘지 않았습니다. 낙관적 락은 충돌이 늘어 오히려 느려졌습니다.
 > Redis Lua 방식은 판정이 Redis 안에서 원자적으로 짧게 끝나서 처리량이 2.1배로 서버 수만큼 늘었습니다.
 > 측정하면서 대사 작업이 처리 중인 발급을 먼저 저장해 사용자가 실패 응답을 받는 버그도 찾았고, 발급 시각 기준 유예 시간을 둬서 고쳤습니다.
+
+## 7단계: 운영 준비 (스케줄 작업 중복 실행 막기, 모니터링)
+
+### 대사 작업이 서버 2대에서 동시에 돈다
+
+대사 작업을 `@Scheduled`로 돌리면 **서버마다 따로** 실행된다. 대사 작업은 서버가 몇 대든 매분 같은 시각에 깨어나도록 `fixedDelay`에서 cron(`0 * * * * *`)으로 바꿨다.
+시작·끝 로그를 남기고 서버 2대에서 확인했다 (`bench/reconcile-check.sh`, 원본은 `bench/results/shedlock/before.txt`).
+
+```
+app1 13:55:00.007  대사 작업 시작
+app2 13:55:00.010  대사 작업 시작        ← 3ms 차이로 두 서버가 함께 시작
+app1 13:55:00.411  대사 보정: DB에 저장 5건, Redis에 복구 0건
+app1 13:55:00.412  대사 작업 끝: 405ms, DB 저장 5건
+app2 13:55:00.526  대사 작업 끝: 515ms, DB 저장 0건
+13:55  실행 2대: app1 app2
+13:56  실행 2대: app1 app2
+```
+
+이번에는 app2가 app1의 저장 뒤에 DB를 읽어서 결과가 맞았지만, 순서는 그때그때 다르다. 저장이 멱등이라 데이터는 깨지지 않아도 문제가 남는다.
+- 같은 작업을 서버 수만큼 해서 DB와 Redis 부하가 그만큼 늘어난다.
+- 두 서버가 같은 빈 자리를 함께 보고 보정하면 보정 건수와 경고 로그가 두 배로 잡힌다.
+- 알림 발송이나 정산처럼 멱등이 아닌 작업이었다면 두 번 실행된다.
+
+### ShedLock으로 한 서버만 실행
+
+`@SchedulerLock`을 붙이면, 작업 직전에 공유 저장소에 락을 잡은 서버만 실행하고 나머지는 건너뛴다 (`SchedulingConfig`, `ReconciliationScheduler`).
+- 락 저장소는 **Redis** (`shedlock-provider-redis-spring`, 키 `job-lock:coupon:couponReconciliation`, `SET NX PX`). 이미 쓰고 있어서 테이블을 따로 만들 필요가 없다.
+  대사 작업 자체가 Redis를 읽으므로 Redis가 죽으면 락이 없어도 어차피 할 수 없는 작업이다.
+- 락을 못 잡은 서버는 `Not executing 'couponReconciliation'. It's locked.`를 남긴다 (DEBUG 로그를 켰다).
+- Redisson 락과 다른 점: Redisson은 "기다렸다가 차례대로 실행"하고, ShedLock은 "누가 하고 있으면 **건너뛴다**". 스케줄 작업은 한 번만 하면 되니 기다릴 필요가 없다.
+
+**유지 시간을 정한 방법** (1분마다 실행, 실제 소요 시간 13~515ms)
+
+- `lockAtMostFor = 50s`: 락을 쥔 서버가 작업 중에 죽으면 락을 풀지 못한다. 이 시간이 지나면 키가 만료돼 다른 서버가 이어받는다.
+  - **실행 간격(60초)보다 짧게**: 죽은 서버의 락 때문에 다음 회차까지 건너뛰지 않게 한다.
+  - **가장 긴 실행 시간보다 충분히 길게**: 작업이 아직 도는데 락이 풀리면 다른 서버가 끼어든다. 지금은 0.5초 이하라 여유가 100배다. 쿠폰이 많아져 수십 초 걸리게 되면 이 값과 실행 간격을 함께 늘린다.
+- `lockAtLeastFor = 10s`: 작업이 13ms 만에 끝나도 10초 동안은 락을 쥐고 있는다.
+  - 서버 시계가 조금씩 다르면, 시계가 늦은 서버는 앞 서버가 **이미 끝내고 락을 푼 뒤에** 깨어나 같은 회차를 또 실행할 수 있다. 10초는 서버 간 시계 차이(보통 1초 미만)보다 넉넉하다.
+  - 다음 실행(60초 뒤)을 막지 않을 만큼 짧다.
+
+**확인**
+- 서버 2대 (`bench/reconcile-check.sh 3`, `bench/results/shedlock/after.txt`): 3분 동안 매분 한 대만 실행했고, 다른 서버는 같은 순간에 `It's locked`로 건너뛰었다. 어느 서버가 실행할지는 그때그때 다르다.
+  ```
+  14:03  실행 1대: app1    (app2: Not executing ... It's locked)
+  14:04  실행 1대: app1    (app2: Not executing ... It's locked)
+  14:05  실행 1대: app2    (app1: Not executing ... It's locked)
+  app1 Locked 'couponReconciliation', lock will be held at most until 14:03:50
+  app1 Task finished, lock 'couponReconciliation' will be released at 14:03:10   ← 0.2초에 끝났지만 10초까지 유지
+  ```
+- 테스트 (`ReconciliationSchedulerLockTest`, 스레드 2개를 서버 2대로 본다. 락이 Redis에 있어서 다른 서버와 똑같이 다툰다)
+  - 두 서버가 동시에 실행하면 대사 서비스는 1번만 불리고, 로그에 "대사 작업 시작" 1번과 `It's locked`가 남는다.
+  - 작업이 금방 끝나도 곧바로 깨어난 두 번째 서버는 실행하지 못한다 (lockAtLeastFor). 락 키의 남은 시간이 10초 이하다.
+  - 죽은 서버가 남긴 락은 만료된 뒤 다른 서버가 실행한다 (lockAtMostFor).
+
+### 모니터링: Actuator, Micrometer, Prometheus, Grafana
+
+```
+app1:8081 ─┐  /actuator/prometheus     Prometheus(:9090)       Grafana(:3000)
+app2:8081 ─┴──────────────────────────▶ 2초마다 가져와 저장 ───▶ 대시보드 "쿠폰 발급 시스템"
+```
+
+- `spring-boot-starter-actuator` + `micrometer-registry-prometheus`: JVM, HTTP 요청, HikariCP, Tomcat, Kafka 클라이언트 지표가 자동으로 나온다.
+- docker 프로필에서는 관리용 주소를 **8081 포트로 분리**했다. nginx는 8080만 넘기므로 밖에서 `/actuator`가 보이지 않는다 (8090으로 요청하면 404).
+- HTTP 응답 시간은 **히스토그램**으로도 내보낸다 (`percentiles-histogram`). 서버마다 p95를 따로 계산하면 두 서버의 p95를 합칠 수 없지만, 구간별 개수는 더할 수 있어서 Grafana에서 서버 2대 전체의 p95를 낸다.
+- `docker compose --profile cluster up -d --build`로 앱 2대, nginx와 함께 Prometheus, Grafana가 뜬다. Grafana는 데이터 소스와 대시보드를 파일에서 자동으로 불러온다.
+  - `monitoring/prometheus/prometheus.yml`: 수집 대상 app1:8081, app2:8081
+  - `monitoring/grafana/provisioning/`: 데이터 소스와 대시보드 폴더 등록
+  - `monitoring/grafana/dashboards/coupon.json`: 대시보드 (`monitoring/grafana/gen_dashboard.py`로 만든다)
+  - http://localhost:3000 은 로그인 없이 볼 수 있다 (편집은 admin/admin).
+
+**커스텀 지표** (`CouponMetrics`)
+
+| 지표 | 종류 | 기록하는 곳 |
+|---|---|---|
+| `coupon_issue_success_total` | 카운터 | 발급 API에서 Redis 판정 통과와 Kafka 전송까지 마쳤을 때 |
+| `coupon_issue_rejected_total{reason}` | 카운터 | 거절 사유별 (`COUPON_SOLD_OUT`, `COUPON_ALREADY_ISSUED`, ...). 0이어도 그래프에 나오도록 미리 등록 |
+| `coupon_issue_save_delay_seconds` | 타이머(히스토그램) | 컨슈머가 DB에 저장한 시각 − 발급 확정 시각. Kafka 컨슈머 처리 지연 |
+| `coupon_reconcile_corrected_total{target}` | 카운터 | 대사 작업이 채운 건수 (`db`: DB에 저장, `redis`: Redis에 복구) |
+| `coupon_reconcile_duration_seconds` | 타이머 | 대사 작업 시간. 서버별 실행 횟수(`_count`)로 ShedLock이 한 대만 돌리는지 본다 |
+
+토픽에 쌓인 메시지 수(lag)는 Kafka 클라이언트 지표 `kafka_consumer_fetch_manager_records_lag`를 쓴다.
+
+**대시보드 패널**: TPS(서버별·합계), p95 응답 시간, 상태 코드 / 발급 성공·거절 사유·컨슈머 저장 속도, Kafka 처리 지연과 lag, 대사 보정 건수와 서버별 실행 / CPU, JVM 힙, GC 시간, DB 커넥션 풀, Tomcat 스레드, 열린 연결 수.
+"발급 성공" 같은 기간 합계는 `increase()` 대신 `max_over_time − min_over_time`으로 센다. `increase()`는 구간 양 끝을 추정으로 늘려서 실제 500건이 514건으로 나왔다.
+
+### 부하 중 대시보드 (Redis + Kafka, 서버 2대, 10,000명)
+
+`bench/monitor.sh <반복 횟수> [쿠폰 수량]`: 10,000명 시나리오를 여러 번 이어 보내고, 그 구간의 대시보드를 headless Chrome으로 캡처한다.
+한 번이 3초 남짓이라 그래프에 점 몇 개뿐이어서 5번 이어 보냈다. 측정 전에 9번 돌려 JIT 워밍업을 했다 (첫 번째 1,322 TPS → 아홉 번째 2,969 TPS).
+
+**① 쿠폰 100장, 10,000명 × 5회** (k6: TPS 2,491~3,385, 중앙값 3,082, p95 중앙값 2.3초, 매회 정확히 100장)
+
+![쿠폰 100장](docs/images/grafana-10000users-100coupons.png)
+
+**② 쿠폰 10,000장, 10,000명 × 3회**: 모두 발급되어 Kafka와 DB 저장까지 부하가 간다 (k6: TPS 2,267~3,286, 매회 DB 10,000건)
+
+![쿠폰 10,000장](docs/images/grafana-10000users-10000coupons.png)
+
+### 어떤 지표가 먼저 한계에 닿나
+
+요청이 몰리는 순간 (Prometheus 2초 간격 값 중 최대, ① 기준):
+
+| 지표 | 최대 | 한계 |
+|---|---|---|
+| CPU 사용률 | **100%** | 서버당 CPU 1개 |
+| DB 커넥션 사용 중 | **10** | 풀 10개 |
+| DB 커넥션 대기 스레드 | **188** | - |
+| 커넥션 얻기까지 평균 / 최대 | 109ms / 4.9초 | - |
+| Tomcat 처리 중 스레드 | **200** | 200개 |
+| 열린 연결 | 4,889 | 20,000 |
+| JVM 힙 | 281MB | 768MB |
+| GC 시간 비율 | 1.9% | - |
+
+- 처음 보이는 경보는 **DB 커넥션 풀**이다. 커넥션 10개가 모두 쓰이고 스레드 188개가 기다린다. 그 바람에 Tomcat 스레드 200개가 다 차고, 나머지 연결 수천 개는 차례를 기다린다.
+  - 발급 API가 DB를 쓰는 곳은 쿠폰 조회(`findById`, 기간과 총 수량 확인) 하나뿐인데도 요청마다 커넥션을 잡는다.
+- 하지만 **진짜 한계는 CPU**였다. 풀을 10 → 40으로 늘려 같은 조건으로 다시 쟀다 (`docs/images/grafana-pool40.png`).
+  - TPS는 늘지 않았다 (중앙값 3,082 → 2,478). 대기 스레드도 188 → 145로 거의 그대로였다.
+  - 커넥션 하나를 쥐고 있는 시간이 7.8ms → 33.8ms로 **커넥션 수만큼 늘었다**. 기본 키 조회는 1ms도 안 걸리는 일인데, 커넥션을 쥔 스레드가 CPU 차례를 기다리느라 오래 쥐고 있는 것이다.
+  - 즉 CPU 1개를 스레드 200개가 나눠 쓰는 것이 병목이고, 커넥션 풀 대기는 그 결과가 가장 먼저 드러난 증상이다. 메모리(힙 37%)와 GC(2% 이하)는 여유가 있었다.
+- **서버가 잰 응답 시간과 사용자가 겪은 응답 시간이 다르다**: 서버 p95는 0.35초인데 k6 p95는 2.3초다. 서버 지표는 Tomcat 스레드가 요청을 잡은 뒤부터 재기 때문에, 스레드가 비기를 기다린 시간이 빠진다. 열린 연결 수와 Tomcat 스레드가 함께 차 있으면 이 대기가 있다는 뜻이다.
+- **Kafka 컨슈머 처리 지연** (②): API는 초당 약 1,670건을 확정하는데 컨슈머 저장은 약 1,610건이라, 한 번에 메시지가 최대 5,312개까지 쌓였다가 몇 초 안에 0으로 돌아왔다. 저장 지연 p95는 5.7초.
+  - 토픽 파티션이 3개라 서버 2대 × 컨슈머 3개 중 **3개만 일한다**. 컨슈머도 같은 DB 커넥션 풀을 API 스레드와 나눠 쓴다.
+  - ①에서도 저장할 메시지는 100개뿐인데 저장 지연 p95가 2.8초였다. 컨슈머가 API 요청 188개 뒤에서 커넥션을 기다렸기 때문이다.
+- TPS 패널의 값(최대 약 1,670)이 k6(약 3,000)보다 낮은 것은 Prometheus `rate()`가 8초 구간 평균이라 3초짜리 몰림을 펴서 보여 주기 때문이다. 짧은 몰림의 처리량은 k6 값이 정확하고, 대시보드는 흐름과 자원 상태를 보는 데 쓴다.
+
+**개선 방향** (다음 단계 후보)
+- 쿠폰 정보(기간, 총 수량)를 캐시해서 발급 API에서 DB 조회를 없앤다. 커넥션 대기와 요청당 CPU를 함께 줄인다.
+- 서버를 늘린다. 6단계에서 Redis Lua 방식은 서버 수만큼 빨라졌다.
+- 컨슈머: 토픽 파티션을 늘려 컨슈머가 모두 일하게 하고, 여러 건을 한 번에 저장(batch insert)한다.
+
+### 면접 답변: "서버가 여러 대일 때 스케줄 작업은 어떻게 하나요? 모니터링은 무엇을 보나요?"
+
+> 서버 2대에서 확인해 보니 대사 작업이 매분 두 서버에서 3ms 차이로 함께 실행됐습니다. 저장이 멱등이라 데이터는 맞았지만 부하가 두 배이고, 멱등이 아닌 작업이면 중복 처리가 됩니다.
+> ShedLock을 Redis에 붙여서 락을 잡은 서버만 실행하고 나머지는 건너뛰게 했습니다. lockAtMostFor는 서버가 죽어도 다음 회차를 막지 않도록 실행 간격보다 짧은 50초, lockAtLeastFor는 서버 간 시계 차이로 같은 회차가 두 번 돌지 않도록 10초로 정했습니다. 컨테이너 로그로 매분 한 대만 실행되는 것을 확인했습니다.
+> 모니터링은 Actuator와 Micrometer로 지표를 내고 Prometheus, Grafana로 봤습니다. 발급 성공·거절 사유, Kafka 저장 지연 같은 업무 지표도 직접 만들었습니다.
+> 10,000명 부하에서 가장 먼저 보인 경보는 DB 커넥션 대기 188개였지만, 풀을 4배로 늘려도 처리량이 그대로이고 커넥션을 쥐는 시간만 4배가 됐습니다. 그래서 진짜 병목은 CPU이고 커넥션 대기는 증상이라고 판단했습니다. 하나의 지표만 보고 풀을 늘렸다면 효과 없이 DB 부담만 키웠을 겁니다.

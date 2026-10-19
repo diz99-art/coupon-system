@@ -1,0 +1,10 @@
+# /var/lib/grafana/dashboards 폴더의 JSON 파일을 대시보드로 불러온다. 파일을 고치면 10초 안에 다시 읽는다.
+apiVersion: 1
+providers:
+  - name: coupon
+    folder: 쿠폰
+    type: file
+    updateIntervalSeconds: 10
+    allowUiUpdates: true
+    options:
+      path: /var/lib/grafana/dashboards

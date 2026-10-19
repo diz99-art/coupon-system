@@ -38,6 +38,20 @@ spring:
         spring.deserializer.value.delegate.class: org.springframework.kafka.support.serializer.JacksonJsonDeserializer
         spring.json.trusted.packages: com.coupon.coupon.messaging
 
+# 모니터링: /actuator/prometheus로 지표를 내보낸다. (docker 프로필에서는 관리용 포트 8081로 분리)
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  metrics:
+    tags:
+      application: coupon
+    distribution:
+      # 응답 시간을 구간별 개수로도 내보내서, Grafana에서 서버 여러 대를 합친 p95를 계산할 수 있게 한다.
+      percentiles-histogram:
+        http.server.requests: true
+
 springdoc:
   swagger-ui:
     path: /swagger-ui.html
@@ -52,7 +66,15 @@ coupon:
       interval-ms: 1000
       max-retries: 3
   reconcile:
-    # Redis와 DB를 비교해 보정하는 간격
-    interval-ms: 60000
+    # Redis와 DB를 비교해 보정하는 시각: 매분 0초 (초 분 시 일 월 요일)
+    cron: "0 * * * * *"
+    # 분산 락(ShedLock) 유지 시간. 이유는 ReconciliationScheduler 주석과 README 7단계에 있다.
+    lock-at-most-for: 50s
+    lock-at-least-for: 10s
     # 발급된 지 이 시간이 지나지 않은 Redis 기록은 아직 저장 중일 수 있어 보정하지 않는다.
     grace-ms: 30000
+
+logging:
+  level:
+    # 락을 못 잡아 건너뛴 기록("Not executing ... It's locked")을 남긴다.
+    net.javacrumbs.shedlock: debug

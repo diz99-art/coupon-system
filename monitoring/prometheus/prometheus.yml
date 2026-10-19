@@ -1,0 +1,14 @@
+# 앱 서버 2대의 지표를 2초마다 가져온다. 부하 테스트가 몇 초 만에 끝나서 간격을 짧게 둔다 (운영에서는 보통 15~30초).
+global:
+  scrape_interval: 2s
+  evaluation_interval: 2s
+
+scrape_configs:
+  - job_name: coupon
+    metrics_path: /actuator/prometheus
+    static_configs:
+      # 관리용 포트 8081 (application-docker.yml). instance 이름을 서버 이름으로 바꿔 그래프에 app1, app2로 나오게 한다.
+      - targets: ["app1:8081"]
+        labels: { instance: app1 }
+      - targets: ["app2:8081"]
+        labels: { instance: app2 }

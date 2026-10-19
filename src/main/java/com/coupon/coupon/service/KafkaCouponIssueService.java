@@ -2,12 +2,14 @@ package com.coupon.coupon.service;
 
 import com.coupon.coupon.domain.Coupon;
 import com.coupon.coupon.domain.exception.CouponAlreadyIssuedException;
+import com.coupon.coupon.domain.exception.CouponException;
 import com.coupon.coupon.domain.exception.CouponIssueBusyException;
 import com.coupon.coupon.domain.exception.CouponNotFoundException;
 import com.coupon.coupon.domain.exception.CouponNotInIssuePeriodException;
 import com.coupon.coupon.domain.exception.CouponSoldOutException;
 import com.coupon.coupon.messaging.CouponIssueMessage;
 import com.coupon.coupon.messaging.CouponIssueProducer;
+import com.coupon.coupon.metrics.CouponMetrics;
 import com.coupon.coupon.repository.CouponIssueRedisRepository;
 import com.coupon.coupon.repository.CouponIssueRedisRepository.IssueResult;
 import com.coupon.coupon.repository.CouponRepository;
@@ -29,8 +31,21 @@ public class KafkaCouponIssueService {
 	private final CouponRepository couponRepository;
 	private final CouponIssueRedisRepository couponIssueRedisRepository;
 	private final CouponIssueProducer couponIssueProducer;
+	private final CouponMetrics couponMetrics;
 
+	/** 발급하고, 결과(확정 또는 거절 사유)를 지표로 센다. */
 	public CouponIssueMessage issue(Long couponId, Long userId) {
+		try {
+			CouponIssueMessage message = tryIssue(couponId, userId);
+			couponMetrics.issued();
+			return message;
+		} catch (CouponException e) {
+			couponMetrics.rejected(e.getErrorCode());
+			throw e;
+		}
+	}
+
+	private CouponIssueMessage tryIssue(Long couponId, Long userId) {
 		// Redis score(밀리초)와 DB 값이 정확히 같도록 밀리초까지만 쓴다.
 		LocalDateTime now = LocalDateTime.now().truncatedTo(ChronoUnit.MILLIS);
 

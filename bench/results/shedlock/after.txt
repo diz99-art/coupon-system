@@ -1,0 +1,29 @@
+쿠폰 3: Redis에만 있는 발급 5건을 넣었다. 3분 동안 지켜본다.
+
+── 대사 작업 로그 (시각순) ──
+app1 2026-10-19T14:03:00.018  대사 작업 시작
+app1 2026-10-19T14:03:00.225  대사 작업 끝: 208ms, DB 저장 5건, Redis 복구 0건
+app1 2026-10-19T14:03:00.225  대사 보정: DB에 저장 5건, Redis에 복구 0건
+app1 2026-10-19T14:04:00.005  대사 작업 시작
+app1 2026-10-19T14:04:00.018  대사 작업 끝: 13ms, DB 저장 0건, Redis 복구 0건
+app2 2026-10-19T14:05:00.038  대사 작업 시작
+app2 2026-10-19T14:05:00.298  대사 작업 끝: 260ms, DB 저장 0건, Redis 복구 0건
+
+── 분마다 실행한 서버 ──
+14:03  실행 1대: app1 
+14:04  실행 1대: app1 
+14:05  실행 1대: app2 
+
+DB 발급 기록: 5건 (기대 5건)
+통과: 매분 한 서버만 대사 작업을 실행했다.
+
+── ShedLock 로그 (서버별) ──
+app1 2026-10-19T14:03:00.016Z DEBUG Locked 'couponReconciliation', lock will be held at most until 2026-10-19T14:03:50.003Z
+app1 2026-10-19T14:03:00.226Z DEBUG Task finished, lock 'couponReconciliation' will be released at 2026-10-19T14:03:10.003Z
+app1 2026-10-19T14:04:00.005Z DEBUG Locked 'couponReconciliation', lock will be held at most until 2026-10-19T14:04:50.001Z
+app1 2026-10-19T14:04:00.019Z DEBUG Task finished, lock 'couponReconciliation' will be released at 2026-10-19T14:04:10.001Z
+app1 2026-10-19T14:05:00.031Z DEBUG Not executing 'couponReconciliation'. It's locked.
+app2 2026-10-19T14:03:00.018Z DEBUG Not executing 'couponReconciliation'. It's locked.
+app2 2026-10-19T14:04:00.004Z DEBUG Not executing 'couponReconciliation'. It's locked.
+app2 2026-10-19T14:05:00.038Z DEBUG Locked 'couponReconciliation', lock will be held at most until 2026-10-19T14:05:50.018Z
+app2 2026-10-19T14:05:00.300Z DEBUG Task finished, lock 'couponReconciliation' will be released at 2026-10-19T14:05:10.018Z

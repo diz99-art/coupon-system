@@ -1,0 +1,12 @@
+# Grafana가 켜질 때 Prometheus 데이터 소스를 자동으로 등록한다.
+apiVersion: 1
+datasources:
+  - name: Prometheus
+    uid: prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    jsonData:
+      # Prometheus 수집 간격과 맞춘다. rate()의 구간($__rate_interval)을 정할 때 쓴다.
+      timeInterval: 2s

@@ -1,6 +1,9 @@
 package com.coupon.coupon.messaging;
 
+import com.coupon.coupon.metrics.CouponMetrics;
 import com.coupon.coupon.service.CouponIssueSaver;
+import java.time.Duration;
+import java.time.LocalDateTime;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.kafka.annotation.KafkaListener;
@@ -16,6 +19,7 @@ import org.springframework.stereotype.Component;
 public class CouponIssueConsumer {
 
 	private final CouponIssueSaver couponIssueSaver;
+	private final CouponMetrics couponMetrics;
 
 	@KafkaListener(
 			topics = "${coupon.kafka.topic}",
@@ -24,6 +28,8 @@ public class CouponIssueConsumer {
 			autoStartup = "${coupon.kafka.listener-auto-startup:true}")
 	public void consume(CouponIssueMessage message) {
 		couponIssueSaver.save(message);
+		// 발급 확정(API 응답) 시각부터 DB 저장까지. 메시지가 토픽에 쌓이면 이 값이 커진다.
+		couponMetrics.savedAfter(Duration.between(message.issuedAt(), LocalDateTime.now()));
 	}
 
 	/** 재시도까지 실패한 메시지. 지금은 기록만 남기고, 빠진 발급은 대사 작업이 보정한다. */

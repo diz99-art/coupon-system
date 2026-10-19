@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 방식마다 새 쿠폰(100장)을 만들고 k6로 동시 요청을 보낸 뒤, 서버에서 실제 발급 결과를 받아 저장한다.
+# 방식마다 새 쿠폰(기본 100장, QUANTITY로 바꿈)을 만들고 k6로 동시 요청을 보낸 뒤, 서버에서 실제 발급 결과를 받아 저장한다.
 # 사용: bench/run.sh <서버 수 1|2> <USERS> [방식...]
 #   예) bench/run.sh 1 1000      (nginx → 서버 1대)
 #       bench/run.sh 2 10000     (nginx → 서버 2대)
@@ -20,7 +20,7 @@ LABEL="servers$SERVERS"
 K6_IMAGE=grafana/k6:2.3.0
 NETWORK=coupon-system_default
 METHODS=${*:-NO_LOCK SYNCHRONIZED PESSIMISTIC_LOCK OPTIMISTIC_LOCK REDISSON_LOCK REDIS_LUA REDIS_KAFKA}
-QUANTITY=100
+QUANTITY=${QUANTITY:-100}
 OUT_DIR=${OUT_DIR:-bench/results/raw}
 REP=${REP:-1}
 mkdir -p "$OUT_DIR"
