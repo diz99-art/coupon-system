@@ -1,7 +1,7 @@
 package com.coupon.coupon.controller;
 
 import com.coupon.coupon.domain.CouponIssue;
-import com.coupon.coupon.service.CouponIssueService;
+import com.coupon.coupon.service.PessimisticLockCouponIssueService;
 import java.time.LocalDateTime;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -13,7 +13,7 @@ import org.springframework.web.bind.annotation.RestController;
 @RequiredArgsConstructor
 public class CouponIssueController {
 
-	private final CouponIssueService couponIssueService;
+	private final PessimisticLockCouponIssueService couponIssueService;
 
 	@PostMapping("/coupons/{couponId}/issue")
 	public IssueResponse issue(@PathVariable Long couponId, @RequestBody IssueRequest request) {

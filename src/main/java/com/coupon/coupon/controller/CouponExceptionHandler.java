@@ -1,6 +1,7 @@
 package com.coupon.coupon.controller;
 
 import com.coupon.coupon.domain.CouponIssueException;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -18,6 +19,12 @@ public class CouponExceptionHandler {
 			case SOLD_OUT, ALREADY_ISSUED -> HttpStatus.CONFLICT;
 		};
 		return ResponseEntity.status(status).body(new ErrorResponse(e.getErrorCode().name()));
+	}
+
+	/** 같은 유저가 동시에 요청해 조회 확인을 통과해도, (쿠폰 id, 유저 id) 유니크 제약에 걸리면 중복 발급으로 응답한다. */
+	@ExceptionHandler(DataIntegrityViolationException.class)
+	public ResponseEntity<ErrorResponse> handleDuplicate(DataIntegrityViolationException e) {
+		return ResponseEntity.status(HttpStatus.CONFLICT).body(new ErrorResponse("ALREADY_ISSUED"));
 	}
 
 	public record ErrorResponse(String code) {

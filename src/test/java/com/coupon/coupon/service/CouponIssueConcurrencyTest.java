@@ -18,7 +18,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 
 /**
- * 1단계: 동시성 처리가 없는 발급 로직에 1,000명이 동시에 요청하면 100장보다 많이 발급되는 것을 확인한다.
+ * 1단계: 동시성 처리가 없는 발급 로직(NoLockCouponIssueService)에 1,000명이 동시에 요청하면 100장보다 많이 발급되는 것을 확인한다.
  * 문제를 보여주는 테스트라서 "초과 발급된다"를 검증한다. 2단계에서 해결한 뒤에는 정확히 100장인지 검증하도록 바꾼다.
  */
 @SpringBootTest
@@ -29,7 +29,7 @@ class CouponIssueConcurrencyTest {
 	private static final int THREAD_COUNT = 32;
 
 	@Autowired
-	private CouponIssueService couponIssueService;
+	private NoLockCouponIssueService couponIssueService;
 
 	@Autowired
 	private CouponRepository couponRepository;
@@ -89,5 +89,40 @@ class CouponIssueConcurrencyTest {
 		System.out.printf("======================%n%n");
 
 		assertThat(issueRows).isGreaterThan(TOTAL_QUANTITY);
+	}
+
+	@Test
+	@DisplayName("같은 유저가 동시에 10번 요청해도 유니크 제약 덕분에 한 번만 발급된다")
+	void sameUserConcurrentRequests() throws InterruptedException {
+		LocalDateTime now = LocalDateTime.now();
+		Coupon coupon = couponRepository.save(
+				new Coupon("중복 확인 쿠폰", TOTAL_QUANTITY, now.minusHours(1), now.plusHours(1)));
+		long userId = 1L;
+		int requestCount = 10;
+
+		ExecutorService executor = Executors.newFixedThreadPool(requestCount);
+		CountDownLatch start = new CountDownLatch(1);
+		CountDownLatch done = new CountDownLatch(requestCount);
+		for (int i = 0; i < requestCount; i++) {
+			executor.submit(() -> {
+				try {
+					start.await();
+					couponIssueService.issue(coupon.getId(), userId);
+				} catch (Exception ignored) {
+				} finally {
+					done.countDown();
+				}
+			});
+		}
+		start.countDown();
+		done.await(30, TimeUnit.SECONDS);
+		executor.shutdown();
+
+		long issueRows = couponIssueRepository.countByCouponId(coupon.getId());
+		System.out.printf("%n===== 중복 요청 결과 =====%n같은 유저 %d번 요청 → 발급 %d건%n=========================%n%n",
+				requestCount, issueRows);
+
+		// 유니크 제약을 넣기 전에는 10번 모두 발급됐다 (README 2단계 참고).
+		assertThat(issueRows).isEqualTo(1);
 	}
 }
