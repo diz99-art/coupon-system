@@ -20,3 +20,32 @@ spring:
     redis:
       host: localhost
       port: 6379
+
+  kafka:
+    bootstrap-servers: localhost:9092
+    producer:
+      # 브로커가 저장을 마쳤다고 답해야 전송 성공으로 본다.
+      acks: all
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JacksonJsonSerializer
+    consumer:
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      # 읽을 수 없는 메시지가 와도 컨슈머가 멈추지 않도록 감싼다.
+      value-deserializer: org.springframework.kafka.support.serializer.ErrorHandlingDeserializer
+      properties:
+        spring.deserializer.value.delegate.class: org.springframework.kafka.support.serializer.JacksonJsonDeserializer
+        spring.json.trusted.packages: com.coupon.coupon.messaging
+
+coupon:
+  kafka:
+    topic: coupon-issue
+    dead-letter-topic: coupon-issue.DLT
+    group-id: coupon-issue-saver
+    retry:
+      # DB 저장 실패 시 1초 간격으로 3번 더 시도하고, 그래도 실패하면 DLT로 보낸다.
+      interval-ms: 1000
+      max-retries: 3
+  reconcile:
+    # Redis와 DB를 비교해 보정하는 간격
+    interval-ms: 60000

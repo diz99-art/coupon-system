@@ -1,4 +1,4 @@
-# 로컬 개발용 MySQL과 Redis. 비밀번호는 내 컴퓨터에서만 쓰는 개발용 값이다.
+# 로컬 개발용 MySQL, Redis, Kafka. 비밀번호는 내 컴퓨터에서만 쓰는 개발용 값이다.
 services:
   mysql:
     image: mysql:8.4
@@ -28,6 +28,31 @@ services:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 3s
+      retries: 20
+
+  # KRaft 모드: Zookeeper 없이 Kafka가 스스로 메타데이터를 관리한다. 노드 하나가 브로커와 컨트롤러를 겸한다.
+  kafka:
+    image: apache/kafka:4.3.1
+    container_name: coupon-kafka
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
+      # 브로커가 한 대뿐이라 내부 토픽 복제본도 1개로 둔다.
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 > /dev/null 2>&1"]
+      interval: 5s
+      timeout: 10s
       retries: 20
 
 volumes:

@@ -1,0 +1,7 @@
+# 테스트 전용 설정. classpath의 config/application.yml은 기본 application.yml보다 우선한다.
+# 테스트끼리 간섭하지 않도록 Kafka 리스너와 대사 스케줄러를 기본으로 꺼 두고, 필요한 테스트에서만 켠다.
+coupon:
+  kafka:
+    listener-auto-startup: false
+  reconcile:
+    scheduled: false

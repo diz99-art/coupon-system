@@ -11,7 +11,7 @@ public class CouponIssueException extends RuntimeException {
 		NOT_IN_ISSUE_PERIOD,
 		SOLD_OUT,
 		ALREADY_ISSUED,
-		/** 락을 기다리다 시간이 다 됐다. 잠시 뒤 다시 요청하면 된다. */
+		/** 락을 기다리다 시간이 다 됐거나 발급 메시지를 보내지 못했다. 잠시 뒤 다시 요청하면 된다. */
 		BUSY
 	}
 

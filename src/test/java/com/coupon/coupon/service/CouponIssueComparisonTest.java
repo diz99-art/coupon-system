@@ -2,7 +2,9 @@ package com.coupon.coupon.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.coupon.coupon.RedisTestSupport;
 import com.coupon.coupon.domain.Coupon;
+import com.coupon.coupon.repository.CouponIssueRedisRepository;
 import com.coupon.coupon.repository.CouponIssueRepository;
 import com.coupon.coupon.repository.CouponRepository;
 import java.time.LocalDateTime;
@@ -47,6 +49,9 @@ class CouponIssueComparisonTest {
 	@Autowired
 	private StringRedisTemplate redisTemplate;
 
+	@Autowired
+	private CouponIssueRedisRepository couponIssueRedisRepository;
+
 	/** 결과 확인 방법: NONE은 기록만, EXACT는 발급 기록과 issuedQuantity 모두 100, ROWS_ONLY는 발급 기록만 100 */
 	enum Expect {
 		NONE, EXACT, ROWS_ONLY
@@ -68,11 +73,7 @@ class CouponIssueComparisonTest {
 	void setUp() {
 		couponIssueRepository.deleteAllInBatch();
 		couponRepository.deleteAllInBatch();
-		// 테스트를 다시 실행하면 쿠폰 id가 1부터 다시 시작하므로 지난번 Redis 카운터와 락을 지운다.
-		var keys = redisTemplate.keys("coupon:*");
-		if (keys != null && !keys.isEmpty()) {
-			redisTemplate.delete(keys);
-		}
+		RedisTestSupport.clearCouponKeys(redisTemplate);
 	}
 
 	@ParameterizedTest(name = "{0}")
@@ -81,7 +82,7 @@ class CouponIssueComparisonTest {
 		CouponIssuer issuer = context.getBean(issuerType);
 		for (int round = 1; round <= 3; round++) {
 			Result result = runOnce(issuer);
-			System.out.printf("[비교] %s %d회차: 발급 %d건, issuedQuantity %d, Redis 카운터 %s, 소요 %dms, 재시도 %d회%n",
+			System.out.printf("[비교] %s %d회차: 발급 %d건, issuedQuantity %d, Redis 카운터 %d, 소요 %dms, 재시도 %d회%n",
 					issuerType.getSimpleName(), round, result.issueRows, result.issuedQuantity,
 					result.redisCount, result.elapsedMillis, result.retries);
 			if (expect != Expect.NONE) {
@@ -91,7 +92,7 @@ class CouponIssueComparisonTest {
 				assertThat(result.issuedQuantity).isEqualTo(TOTAL_QUANTITY);
 			}
 			if (expect == Expect.ROWS_ONLY) {
-				assertThat(result.redisCount).isEqualTo(String.valueOf(TOTAL_QUANTITY));
+				assertThat(result.redisCount).isEqualTo(TOTAL_QUANTITY);
 			}
 		}
 	}
@@ -136,12 +137,11 @@ class CouponIssueComparisonTest {
 		if (unexpectedErrors.get() > 0) {
 			System.out.printf("[비교] 예상하지 못한 예외 %d건%n", unexpectedErrors.get());
 		}
-		String redisCount = redisTemplate.opsForValue()
-				.get(RedisCounterCouponIssueService.ISSUED_COUNT_KEY.formatted(coupon.getId()));
+		long redisCount = couponIssueRedisRepository.issuedCount(coupon.getId());
 		return new Result(issueRows, saved.getIssuedQuantity(), redisCount, elapsedMillis,
 				optimisticLockService.getRetryCount());
 	}
 
-	private record Result(long issueRows, int issuedQuantity, String redisCount, long elapsedMillis, long retries) {
+	private record Result(long issueRows, int issuedQuantity, long redisCount, long elapsedMillis, long retries) {
 	}
 }

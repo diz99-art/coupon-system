@@ -17,10 +17,16 @@
 ## 기술 스택
 
 - Java 21, Spring Boot 4, Gradle(Groovy)
-- Spring Web, Spring Data JPA, MySQL 8.4, Spring Data Redis(Redis 7), Redisson, Lombok
+- Spring Web, Spring Data JPA, MySQL 8.4, Spring Data Redis(Redis 7), Redisson, Spring Kafka(Kafka 4.3, KRaft), Lombok
 
 ## 명령어
 
-- DB·Redis 실행: `docker compose up -d` (종료: `docker compose down`)
+- MySQL·Redis·Kafka 실행: `docker compose up -d` (종료: `docker compose down`)
 - 서버 실행: `./gradlew bootRun`
-- 테스트: `./gradlew test`
+- 테스트: `./gradlew test` (docker compose가 떠 있어야 한다)
+
+## 테스트 주의
+
+- `src/test/resources/config/application.yml`이 테스트에서 Kafka 리스너와 대사 스케줄러를 끈다. 필요한 테스트만 켠다.
+- Kafka 실패 처리 테스트는 내장 Kafka(@EmbeddedKafka), 측정 테스트는 docker Kafka의 측정 전용 토픽을 쓴다.
+  개발 서버가 읽는 `coupon-issue` 토픽에 테스트 메시지를 넣지 않는다.
