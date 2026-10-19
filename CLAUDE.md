@@ -21,6 +21,7 @@
 
 ## 명령어
 
+- 처음 한 번: `cp .env.example .env` (비밀번호 등 환경변수. `.env`는 git에 올리지 않는다)
 - MySQL·Redis·Kafka 실행: `docker compose up -d` (종료: `docker compose down`)
 - 서버 실행: `./gradlew bootRun` (기본 local 프로필: 켤 때마다 DB 테이블과 Redis 쿠폰 키 초기화)
 - API 문서: 서버 실행 후 http://localhost:8080/swagger-ui.html
@@ -37,6 +38,8 @@
 
 - local(기본): 개발 서버. 켤 때마다 DB 테이블, Redis 쿠폰 키, Kafka 발급 토픽의 남은 메시지를 비운다.
 - test: 테스트. docker: 컨테이너 실행(ddl-auto update, 토픽 coupon-issue-cluster). bench: 비교 API(/bench) 켜기.
+- prod: 배포용. ddl-auto validate + `db/schema.sql`(테이블을 바꾸면 이 파일과 엔티티를 함께 고친다), bench·Swagger 꺼짐, 관리 포트 8081.
+- 접속 정보와 비밀번호는 코드나 yml에 쓰지 않고 환경변수(`DB_PASSWORD` 등)로 받는다. 새 값이 생기면 `.env.example`에도 추가한다.
 
 ## 쿠폰 정보 캐시
 
@@ -46,6 +49,10 @@
 ## 스케줄 작업
 
 - 대사 작업은 cron(매분 0초) + ShedLock(Redis 키 `job-lock:coupon:<이름>`)으로 한 서버만 실행한다. 새 스케줄 작업에도 `@SchedulerLock`을 붙인다.
+
+## CI
+
+- GitHub Actions(`.github/workflows/ci.yml`)가 push·PR마다 `docker compose up -d --wait mysql redis kafka` 후 `./gradlew test`를 돌린다.
 
 ## 테스트 주의
 
