@@ -1,12 +1,6 @@
-# 컨테이너(docker compose의 cluster 프로필)에서 실행할 때. 다른 컨테이너는 서비스 이름으로 찾는다.
+# 컨테이너(docker compose의 cluster 프로필)에서 실행할 때.
+# 접속 주소(DB_HOST=mysql, REDIS_HOST=redis, KAFKA_BOOTSTRAP_SERVERS=kafka:29092)와 비밀번호는 docker-compose.yml이 환경변수로 넣는다.
 spring:
-  datasource:
-    url: jdbc:mysql://mysql:3306/coupon?serverTimezone=Asia/Seoul&characterEncoding=UTF-8
-  data:
-    redis:
-      host: redis
-  kafka:
-    bootstrap-servers: kafka:29092
   jpa:
     hibernate:
       # 서버 두 대가 같은 DB를 쓰므로 켤 때마다 지우지(create) 않고 없는 테이블만 만든다.

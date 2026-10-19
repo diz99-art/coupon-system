@@ -14,7 +14,8 @@ CHROME="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 mkdir -p "$OUT"
 
 mysql_status() {
-  docker exec coupon-mysql mysql -uroot -proot -N -B -e \
+  # root 비밀번호는 MySQL 컨테이너의 환경변수(.env에서 온 값)를 그 안에서 읽어 쓴다.
+  docker exec coupon-mysql sh -c 'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" exec mysql -uroot "$@"' mysql -N -B -e \
     "SHOW GLOBAL STATUS WHERE Variable_name IN ('Questions','Com_select','Com_insert','Com_commit','Com_set_option')" 2>/dev/null \
     | awk '{printf "\"%s\":%s,", $1, $2}' | sed 's/,$//; s/^/{/; s/$/}/'
 }

@@ -1,5 +1,6 @@
 package com.coupon.coupon.repository;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
@@ -28,7 +29,9 @@ public class CouponIssueRedisRepository {
 	public enum IssueResult {
 		OK, ALREADY_ISSUED, SOLD_OUT, NOT_IN_ISSUE_PERIOD,
 		/** Redis에 쿠폰 정보가 없다. DB에서 읽어 올린 뒤 다시 시도한다. */
-		INFO_NOT_LOADED
+		INFO_NOT_LOADED,
+		/** 얼마 전 DB에서 없다고 확인한 쿠폰이다 ("없음" 표시가 남아 있다). DB를 다시 읽지 않는다. */
+		NOT_FOUND
 	}
 
 	/** 쿠폰 관련 키는 모두 이 접두어로 시작한다 (개발 서버 시작 시 초기화, 테스트 정리에 쓴다). */
@@ -37,6 +40,7 @@ public class CouponIssueRedisRepository {
 	private static final String USERS_KEY = "coupon:%d:users";
 	private static final String COUNT_KEY = "coupon:%d:count";
 	private static final String INFO_KEY = "coupon:%d:info";
+	private static final String NOT_FOUND_KEY = "coupon:%d:not-found";
 	private static final ZoneId ZONE = ZoneId.systemDefault();
 
 	/**
@@ -58,12 +62,16 @@ public class CouponIssueRedisRepository {
 
 	/**
 	 * 쿠폰 정보까지 Redis 안에서 확인하는 발급. DB를 읽지 않는다.
-	 * KEYS[1] 받은 유저, KEYS[2] 발급 수량, KEYS[3] 쿠폰 정보 해시, ARGV[1] 유저 id, ARGV[2] 지금 시각(epoch 밀리초).
-	 * 0 쿠폰 정보 없음, 1 발급, 2 이미 받음, 3 매진, 4 발급 기간 아님
+	 * KEYS[1] 받은 유저, KEYS[2] 발급 수량, KEYS[3] 쿠폰 정보 해시, KEYS[4] "없음" 표시,
+	 * ARGV[1] 유저 id, ARGV[2] 지금 시각(epoch 밀리초).
+	 * 0 쿠폰 정보 없음, 1 발급, 2 이미 받음, 3 매진, 4 발급 기간 아님, 5 없는 쿠폰("없음" 표시)
 	 */
 	private static final RedisScript<Long> TRY_ISSUE_WITH_INFO = RedisScript.of("""
 			local info = redis.call('HMGET', KEYS[3], 'total', 'start', 'end')
 			if not info[1] then
+				if redis.call('EXISTS', KEYS[4]) == 1 then
+					return 5
+				end
 				return 0
 			end
 			local now = tonumber(ARGV[2])
@@ -85,9 +93,11 @@ public class CouponIssueRedisRepository {
 	/**
 	 * 캐시 미스 때 DB에서 읽은 쿠폰 정보를 올린다. 이미 있으면 덮어쓰지 않는다.
 	 * DB를 읽은 뒤 올리기 전에 쿠폰이 수정됐다면, 수정이 먼저 넣은 새 값을 옛 값으로 덮지 않기 위해서다.
-	 * KEYS[1] 쿠폰 정보 해시, ARGV 총 수량, 시작, 종료
+	 * 쿠폰이 생긴 것이므로 "없음" 표시도 지운다.
+	 * KEYS[1] 쿠폰 정보 해시, KEYS[2] "없음" 표시, ARGV 총 수량, 시작, 종료
 	 */
 	private static final RedisScript<Long> LOAD_INFO = RedisScript.of("""
+			redis.call('DEL', KEYS[2])
 			if redis.call('EXISTS', KEYS[1]) == 1 then
 				return 0
 			end
@@ -153,21 +163,36 @@ public class CouponIssueRedisRepository {
 	/** 8단계 방식: 기간과 총 수량을 Redis의 쿠폰 정보로 확인한다. issuedAt이 판정 기준 시각이자 발급 시각이다. */
 	public IssueResult tryIssue(Long couponId, Long userId, LocalDateTime issuedAt) {
 		Long result = redisTemplate.execute(TRY_ISSUE_WITH_INFO,
-				List.of(USERS_KEY.formatted(couponId), COUNT_KEY.formatted(couponId), INFO_KEY.formatted(couponId)),
+				List.of(USERS_KEY.formatted(couponId), COUNT_KEY.formatted(couponId), INFO_KEY.formatted(couponId),
+						NOT_FOUND_KEY.formatted(couponId)),
 				String.valueOf(userId), String.valueOf(toEpochMillis(issuedAt)));
 		return switch (result == null ? -1 : result.intValue()) {
 			case 0 -> IssueResult.INFO_NOT_LOADED;
 			case 1 -> IssueResult.OK;
 			case 2 -> IssueResult.ALREADY_ISSUED;
 			case 4 -> IssueResult.NOT_IN_ISSUE_PERIOD;
+			case 5 -> IssueResult.NOT_FOUND;
 			default -> IssueResult.SOLD_OUT;
 		};
 	}
 
 	/** 쿠폰 정보가 없을 때만 올린다 (캐시 미스, 쿠폰 생성). 올렸으면 true. */
 	public boolean loadInfo(CouponInfo info) {
-		Long result = redisTemplate.execute(LOAD_INFO, List.of(INFO_KEY.formatted(info.couponId())), infoArgs(info));
+		Long result = redisTemplate.execute(LOAD_INFO,
+				List.of(INFO_KEY.formatted(info.couponId()), NOT_FOUND_KEY.formatted(info.couponId())), infoArgs(info));
 		return result != null && result == 1;
+	}
+
+	/**
+	 * DB에 없는 쿠폰이라고 ttl 동안 표시한다 (캐시 관통 방지). 그동안 같은 id의 발급 요청은 DB를 읽지 않고 404가 된다.
+	 * 그 사이 쿠폰이 만들어지면 loadInfo가 표시를 지운다.
+	 */
+	public void markNotFound(Long couponId, Duration ttl) {
+		redisTemplate.opsForValue().set(NOT_FOUND_KEY.formatted(couponId), "1", ttl);
+	}
+
+	public boolean isMarkedNotFound(Long couponId) {
+		return Boolean.TRUE.equals(redisTemplate.hasKey(NOT_FOUND_KEY.formatted(couponId)));
 	}
 
 	/** 쿠폰 수정. 이미 발급된 수량보다 적은 총 수량이면 바꾸지 않고 false. */

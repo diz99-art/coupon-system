@@ -1,0 +1,52 @@
+# 운영(AWS 등) 프로필. SPRING_PROFILES_ACTIVE=prod
+# 접속 정보와 비밀번호는 모두 환경변수로 받는다 (.env.example 참고):
+#   DB_HOST, DB_USERNAME, DB_PASSWORD, REDIS_HOST, REDIS_PASSWORD, REDIS_SSL, KAFKA_BOOTSTRAP_SERVERS, KAFKA_REPLICATION_FACTOR
+# bench 프로필을 함께 켜도 비교 API는 만들어지지 않는다 (@Profile("bench & !prod")).
+spring:
+  jpa:
+    hibernate:
+      # 테이블을 만들거나 고치지 않고, 엔티티와 실제 테이블이 맞는지만 확인한다. 다르면 시작하지 않는다.
+      ddl-auto: validate
+  sql:
+    init:
+      # 시작할 때 db/schema.sql(CREATE TABLE IF NOT EXISTS)을 실행해 첫 배포에서 테이블을 만든다.
+      mode: always
+      schema-locations: classpath:db/schema.sql
+
+server:
+  shutdown: graceful
+  tomcat:
+    max-connections: 20000
+    accept-count: 10000
+    mbeanregistry:
+      enabled: true
+
+# 상태 확인과 지표는 관리용 포트(8081)로만 연다. 로드밸런서·보안 그룹에서 8081은 밖에 열지 않는다.
+management:
+  server:
+    port: 8081
+  endpoints:
+    web:
+      exposure:
+        include: health,prometheus
+  endpoint:
+    health:
+      # 로드밸런서·컨테이너 오케스트레이터가 쓰는 /actuator/health/liveness, /readiness
+      probes:
+        enabled: true
+
+# API 문서는 운영에서 끈다.
+springdoc:
+  api-docs:
+    enabled: false
+  swagger-ui:
+    enabled: false
+
+coupon:
+  kafka:
+    # 운영 Kafka(MSK 등)는 브로커 3대에 복제본 3개
+    replicas: ${KAFKA_REPLICATION_FACTOR:3}
+
+logging:
+  level:
+    net.javacrumbs.shedlock: info

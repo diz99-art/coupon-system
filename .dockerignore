@@ -6,3 +6,6 @@ bin
 out
 *.log
 HELP.md
+.env
+.env.*
+!.env.example

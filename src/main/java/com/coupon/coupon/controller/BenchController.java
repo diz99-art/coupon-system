@@ -29,10 +29,11 @@ import org.springframework.web.bind.annotation.RestController;
 
 /**
  * 부하 테스트용 비교 API. bench 프로필에서만 빈이 만들어지므로 운영(local, docker 단독)에서는 주소 자체가 없다(404).
+ * prod 프로필과 함께 켜면 bench를 실수로 넣어도 만들어지지 않는다.
  * 발급 방식을 골라 같은 요청으로 비교하고, 결과(DB 발급 건수, Redis 카운터)를 확인한다.
  */
 @Tag(name = "비교 (bench 프로필 전용)", description = "발급 방식별 부하 테스트")
-@Profile("bench")
+@Profile("bench & !prod")
 @RestController
 @RequestMapping("/bench")
 public class BenchController {

@@ -14,10 +14,11 @@ import com.coupon.coupon.repository.CouponInfo;
 import com.coupon.coupon.repository.CouponIssueRedisRepository;
 import com.coupon.coupon.repository.CouponIssueRedisRepository.IssueResult;
 import com.coupon.coupon.repository.CouponRepository;
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.temporal.ChronoUnit;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 /**
@@ -27,13 +28,23 @@ import org.springframework.stereotype.Service;
  */
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class KafkaCouponIssueService {
 
 	private final CouponRepository couponRepository;
 	private final CouponIssueRedisRepository couponIssueRedisRepository;
 	private final CouponIssueProducer couponIssueProducer;
 	private final CouponMetrics couponMetrics;
+	private final Duration notFoundTtl;
+
+	public KafkaCouponIssueService(CouponRepository couponRepository,
+			CouponIssueRedisRepository couponIssueRedisRepository, CouponIssueProducer couponIssueProducer,
+			CouponMetrics couponMetrics, @Value("${coupon.cache.not-found-ttl}") Duration notFoundTtl) {
+		this.couponRepository = couponRepository;
+		this.couponIssueRedisRepository = couponIssueRedisRepository;
+		this.couponIssueProducer = couponIssueProducer;
+		this.couponMetrics = couponMetrics;
+		this.notFoundTtl = notFoundTtl;
+	}
 
 	/** 발급하고, 결과(확정 또는 거절 사유)를 지표로 센다. */
 	public CouponIssueMessage issue(Long couponId, Long userId) {
@@ -63,6 +74,7 @@ public class KafkaCouponIssueService {
 			case ALREADY_ISSUED -> throw new CouponAlreadyIssuedException();
 			case SOLD_OUT -> throw new CouponSoldOutException();
 			case NOT_IN_ISSUE_PERIOD -> throw new CouponNotInIssuePeriodException();
+			case NOT_FOUND -> throw new CouponNotFoundException();
 			// 올린 직후 지워진 경우(동시에 무효화)뿐이라 드물다. 잠시 뒤 다시 시도하게 한다.
 			case INFO_NOT_LOADED -> throw new CouponIssueBusyException();
 		}
@@ -80,8 +92,13 @@ public class KafkaCouponIssueService {
 		return message;
 	}
 
+	/** 캐시 미스: DB에서 읽어 Redis에 올린다. DB에도 없으면 "없음"을 잠시 기록해서 같은 id로 DB를 계속 두드리지 않게 한다. */
 	private void loadCouponInfo(Long couponId) {
-		Coupon coupon = couponRepository.findById(couponId).orElseThrow(CouponNotFoundException::new);
+		Coupon coupon = couponRepository.findById(couponId).orElse(null);
+		if (coupon == null) {
+			couponIssueRedisRepository.markNotFound(couponId, notFoundTtl);
+			throw new CouponNotFoundException();
+		}
 		couponIssueRedisRepository.loadInfo(CouponInfo.from(coupon));
 	}
 }

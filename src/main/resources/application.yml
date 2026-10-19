@@ -5,10 +5,15 @@ spring:
     # 프로필을 정하지 않고 실행하면 개발 환경(local)으로 뜬다. 테스트는 test 프로필을 쓴다.
     default: local
 
+  config:
+    # 접속 정보와 비밀번호는 환경변수로 받는다. 내 컴퓨터에서는 프로젝트 폴더의 .env 파일을 읽는다 (없으면 건너뜀).
+    # .env는 git에 올리지 않는다. 처음에는 cp .env.example .env
+    import: optional:file:.env[.properties]
+
   datasource:
-    url: jdbc:mysql://localhost:3306/coupon?serverTimezone=Asia/Seoul&characterEncoding=UTF-8
-    username: coupon
-    password: coupon
+    url: jdbc:mysql://${DB_HOST:localhost}:${DB_PORT:3306}/${DB_NAME:coupon}?serverTimezone=Asia/Seoul&characterEncoding=UTF-8
+    username: ${DB_USERNAME}
+    password: ${DB_PASSWORD}
     driver-class-name: com.mysql.cj.jdbc.Driver
 
   jpa:
@@ -19,11 +24,14 @@ spring:
 
   data:
     redis:
-      host: localhost
-      port: 6379
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      ssl:
+        enabled: ${REDIS_SSL:false}
 
   kafka:
-    bootstrap-servers: localhost:9092
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
     producer:
       # 브로커가 저장을 마쳤다고 답해야 전송 성공으로 본다.
       acks: all
@@ -61,10 +69,16 @@ coupon:
     topic: coupon-issue
     dead-letter-topic: coupon-issue.DLT
     group-id: coupon-issue-saver
+    # 토픽을 만들 때 쓴다. 브로커가 1대인 개발 환경은 복제본 1개, 운영(prod)은 3개.
+    partitions: 3
+    replicas: 1
     retry:
       # DB 저장 실패 시 1초 간격으로 3번 더 시도하고, 그래도 실패하면 DLT로 보낸다.
       interval-ms: 1000
       max-retries: 3
+  cache:
+    # 없는 쿠폰 id를 이 시간 동안 "없음"으로 기억해서 같은 id의 요청이 DB를 반복해서 읽지 않게 한다 (캐시 관통 방지).
+    not-found-ttl: 10s
   reconcile:
     # Redis와 DB를 비교해 보정하는 시각: 매분 0초 (초 분 시 일 월 요일)
     cron: "0 * * * * *"

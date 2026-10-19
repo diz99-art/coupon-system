@@ -5,7 +5,11 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-MYSQL="docker exec coupon-mysql mysql -uroot -proot -N -B"
+# root 비밀번호는 MySQL 컨테이너의 환경변수(.env에서 온 값)를 그 안에서 읽어 쓴다.
+mysql_root() {
+  docker exec coupon-mysql sh -c 'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" exec mysql -uroot "$@"' mysql -N -B "$@"
+}
+MYSQL=mysql_root
 COUPON_ID=$(curl -sf -X POST http://localhost:8091/coupons -H 'Content-Type: application/json' \
   -d '{"name":"요청 추적","totalQuantity":10,"issueStartAt":"2020-01-01T00:00:00","issueEndAt":"2099-01-01T00:00:00"}' \
   | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')

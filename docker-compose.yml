@@ -1,21 +1,21 @@
-# 로컬 개발용 MySQL, Redis, Kafka. 비밀번호는 내 컴퓨터에서만 쓰는 개발용 값이다.
+# 로컬 개발용 MySQL, Redis, Kafka. 비밀번호는 .env 파일에서 읽는다 (처음에는 cp .env.example .env).
 # 서버 2대, nginx, Prometheus, Grafana는 cluster 프로필로 따로 켠다: docker compose --profile cluster up -d --build
 services:
   mysql:
     image: mysql:8.4
     container_name: coupon-mysql
     environment:
-      MYSQL_ROOT_PASSWORD: root
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?.env 파일이 없습니다. cp .env.example .env}
       MYSQL_DATABASE: coupon
-      MYSQL_USER: coupon
-      MYSQL_PASSWORD: coupon
+      MYSQL_USER: ${DB_USERNAME:?.env 파일이 없습니다. cp .env.example .env}
+      MYSQL_PASSWORD: ${DB_PASSWORD:?.env 파일이 없습니다. cp .env.example .env}
       TZ: Asia/Seoul
     ports:
       - "3306:3306"
     volumes:
       - mysql-data:/var/lib/mysql
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-proot"]
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost -uroot -p\"$$MYSQL_ROOT_PASSWORD\""]
       interval: 5s
       timeout: 3s
       retries: 20
@@ -66,8 +66,13 @@ services:
     image: coupon-app:latest
     container_name: coupon-app1
     hostname: app1
-    environment:
+    environment: &app-env
       SPRING_PROFILES_ACTIVE: docker,bench
+      DB_HOST: mysql
+      DB_USERNAME: ${DB_USERNAME}
+      DB_PASSWORD: ${DB_PASSWORD}
+      REDIS_HOST: redis
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
     depends_on:
       mysql: { condition: service_healthy }
       redis: { condition: service_healthy }
@@ -85,8 +90,7 @@ services:
     image: coupon-app:latest
     container_name: coupon-app2
     hostname: app2
-    environment:
-      SPRING_PROFILES_ACTIVE: docker,bench
+    environment: *app-env
     # app1이 테이블을 다 만든 뒤에 켜서 두 서버가 동시에 테이블을 만들다 부딪치지 않게 한다.
     depends_on:
       app1: { condition: service_healthy }
@@ -129,7 +133,7 @@ services:
     volumes:
       - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
 
-  # http://localhost:3000 (로그인 없이 보기, 편집은 admin/admin). 데이터 소스와 대시보드는 파일에서 자동으로 불러온다.
+  # http://localhost:3000 (로그인 없이 보기, 편집은 admin / .env의 GRAFANA_ADMIN_PASSWORD). 데이터 소스와 대시보드는 파일에서 자동으로 불러온다.
   grafana:
     profiles: ["cluster"]
     image: grafana/grafana:13.2.2
@@ -137,7 +141,7 @@ services:
     ports:
       - "3000:3000"
     environment:
-      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
       GF_AUTH_ANONYMOUS_ENABLED: "true"
       GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
       GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/coupon.json

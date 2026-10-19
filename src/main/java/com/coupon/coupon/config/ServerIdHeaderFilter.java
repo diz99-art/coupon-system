@@ -13,7 +13,7 @@ import org.springframework.web.filter.OncePerRequestFilter;
 
 /** 부하 테스트에서 어느 서버가 응답했는지 세려고 응답 헤더에 서버 이름(컨테이너 호스트명)을 붙인다. */
 @Component
-@Profile("bench")
+@Profile("bench & !prod")
 public class ServerIdHeaderFilter extends OncePerRequestFilter {
 
 	public static final String HEADER = "X-Server-Id";

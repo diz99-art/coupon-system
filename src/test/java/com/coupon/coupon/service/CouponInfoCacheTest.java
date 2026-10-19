@@ -12,6 +12,7 @@ import com.coupon.coupon.domain.exception.CouponSoldOutException;
 import com.coupon.coupon.messaging.CouponIssueProducer;
 import com.coupon.coupon.repository.CouponInfo;
 import jakarta.persistence.EntityManagerFactory;
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.temporal.ChronoUnit;
 import org.hibernate.SessionFactory;
@@ -28,7 +29,8 @@ import org.springframework.transaction.support.TransactionTemplate;
  * 8단계: 발급 판정에 쓰는 쿠폰 정보를 Redis에 두는 캐시.
  * 실행된 SQL 수는 Hibernate 통계(generate_statistics)의 prepareStatementCount로 센다. Kafka 전송은 가짜로 바꾼다.
  */
-@SpringBootTest(properties = "spring.jpa.properties.hibernate.generate_statistics=true")
+@SpringBootTest(properties = {"spring.jpa.properties.hibernate.generate_statistics=true",
+		"coupon.cache.not-found-ttl=1s"})
 class CouponInfoCacheTest extends IntegrationTest {
 
 	@Autowired
@@ -95,10 +97,43 @@ class CouponInfoCacheTest extends IntegrationTest {
 	}
 
 	@Test
-	@DisplayName("없는 쿠폰은 DB에서 확인하고 404 예외, Redis에는 아무것도 남기지 않는다")
-	void notFound() {
+	@DisplayName("캐시 관통 방지: 없는 쿠폰은 한 번만 DB에서 확인하고, \"없음\" 표시가 남은 동안은 DB를 읽지 않고 404")
+	void notFoundIsCachedBriefly() throws InterruptedException {
+		statistics.clear();
 		assertThatThrownBy(() -> couponIssueService.issue(999_999L, 1L)).isInstanceOf(CouponNotFoundException.class);
+		assertThat(statistics.getPrepareStatementCount()).isEqualTo(1);
+		assertThat(couponIssueRedisRepository.isMarkedNotFound(999_999L)).isTrue();
 		assertThat(couponIssueRedisRepository.findInfo(999_999L)).isEmpty();
+
+		statistics.clear();
+		for (long userId = 2; userId <= 10; userId++) {
+			long user = userId;
+			assertThatThrownBy(() -> couponIssueService.issue(999_999L, user))
+					.isInstanceOf(CouponNotFoundException.class);
+		}
+		assertThat(statistics.getPrepareStatementCount()).isZero();
+
+		// 표시는 TTL(이 테스트에서는 1초)이 지나면 사라지고, 다음 요청은 다시 DB에서 확인한다.
+		Thread.sleep(1_200);
+		statistics.clear();
+		assertThatThrownBy(() -> couponIssueService.issue(999_999L, 1L)).isInstanceOf(CouponNotFoundException.class);
+		assertThat(statistics.getPrepareStatementCount()).isEqualTo(1);
+	}
+
+	@Test
+	@DisplayName("\"없음\" 표시가 남아 있어도 쿠폰 정보가 올라가면(쿠폰 생성) 표시를 지우고 바로 발급된다")
+	void loadingInfoClearsNotFoundMark() {
+		// "없음"으로 확인된 직후 그 id의 쿠폰이 만들어진 상황
+		Coupon coupon = couponRepository.save(new Coupon("쿠폰", 10, now.minusHours(1), now.plusHours(1)));
+		couponIssueRedisRepository.markNotFound(coupon.getId(), Duration.ofMinutes(1));
+		assertThatThrownBy(() -> couponIssueService.issue(coupon.getId(), 1L))
+				.isInstanceOf(CouponNotFoundException.class);
+
+		// 쿠폰 생성이 커밋 뒤에 하는 일
+		couponIssueRedisRepository.loadInfo(CouponInfo.from(coupon));
+
+		assertThat(couponIssueRedisRepository.isMarkedNotFound(coupon.getId())).isFalse();
+		couponIssueService.issue(coupon.getId(), 1L);
 	}
 
 	@Test

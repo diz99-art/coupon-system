@@ -14,16 +14,18 @@ import org.springframework.util.backoff.FixedBackOff;
 @Configuration
 public class KafkaConfig {
 
-	/** 발급 메시지 토픽. 파티션 3개라 컨슈머 3개가 나눠서 처리할 수 있다. */
+	/** 발급 메시지 토픽. 파티션 수만큼 컨슈머가 나눠서 처리할 수 있다. 복제본은 브로커 수 이하로 둔다. */
 	@Bean
-	public NewTopic couponIssueTopic(@Value("${coupon.kafka.topic}") String topic) {
-		return TopicBuilder.name(topic).partitions(3).replicas(1).build();
+	public NewTopic couponIssueTopic(@Value("${coupon.kafka.topic}") String topic,
+			@Value("${coupon.kafka.partitions}") int partitions, @Value("${coupon.kafka.replicas}") int replicas) {
+		return TopicBuilder.name(topic).partitions(partitions).replicas(replicas).build();
 	}
 
 	/** 재시도까지 실패한 발급 메시지가 모이는 곳 (Dead Letter Topic) */
 	@Bean
-	public NewTopic couponIssueDeadLetterTopic(@Value("${coupon.kafka.dead-letter-topic}") String deadLetterTopic) {
-		return TopicBuilder.name(deadLetterTopic).partitions(1).replicas(1).build();
+	public NewTopic couponIssueDeadLetterTopic(@Value("${coupon.kafka.dead-letter-topic}") String deadLetterTopic,
+			@Value("${coupon.kafka.replicas}") int replicas) {
+		return TopicBuilder.name(deadLetterTopic).partitions(1).replicas(replicas).build();
 	}
 
 	/**

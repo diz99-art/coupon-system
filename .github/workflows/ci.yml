@@ -1,0 +1,46 @@
+# push와 PR마다 전체 테스트를 돌린다.
+# 테스트는 실제 MySQL, Redis, Kafka를 쓰므로 로컬과 같은 docker-compose.yml로 띄운다.
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: 21
+
+      # Gradle 의존성과 빌드 결과를 캐시한다.
+      - uses: gradle/actions/setup-gradle@v6
+
+      # CI에서만 쓰는 일회용 컨테이너라 예시 값을 그대로 쓴다.
+      - name: .env 만들기
+        run: cp .env.example .env
+
+      - name: MySQL, Redis, Kafka 실행
+        run: docker compose up -d --wait mysql redis kafka
+
+      - name: 테스트
+        run: ./gradlew test
+
+      - name: 실패하면 테스트 보고서 올리기
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-report
+          path: build/reports/tests/test
+
+      - name: 실패하면 컨테이너 로그 보기
+        if: failure()
+        run: docker compose logs --tail 200
