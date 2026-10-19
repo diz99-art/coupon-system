@@ -17,6 +17,7 @@ public class CouponExceptionHandler {
 			case COUPON_NOT_FOUND -> HttpStatus.NOT_FOUND;
 			case NOT_IN_ISSUE_PERIOD -> HttpStatus.BAD_REQUEST;
 			case SOLD_OUT, ALREADY_ISSUED -> HttpStatus.CONFLICT;
+			case BUSY -> HttpStatus.SERVICE_UNAVAILABLE;
 		};
 		return ResponseEntity.status(status).body(new ErrorResponse(e.getErrorCode().name()));
 	}

@@ -17,7 +17,7 @@
 ## 기술 스택
 
 - Java 21, Spring Boot 4, Gradle(Groovy)
-- Spring Web, Spring Data JPA, MySQL 8.4, Spring Data Redis(Redis 7), Lombok
+- Spring Web, Spring Data JPA, MySQL 8.4, Spring Data Redis(Redis 7), Redisson, Lombok
 
 ## 명령어
 

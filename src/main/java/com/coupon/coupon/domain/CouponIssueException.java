@@ -10,7 +10,9 @@ public class CouponIssueException extends RuntimeException {
 		COUPON_NOT_FOUND,
 		NOT_IN_ISSUE_PERIOD,
 		SOLD_OUT,
-		ALREADY_ISSUED
+		ALREADY_ISSUED,
+		/** 락을 기다리다 시간이 다 됐다. 잠시 뒤 다시 요청하면 된다. */
+		BUSY
 	}
 
 	private final ErrorCode errorCode;

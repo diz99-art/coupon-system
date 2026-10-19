@@ -19,9 +19,10 @@ import org.junit.jupiter.params.provider.MethodSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.ApplicationContext;
+import org.springframework.data.redis.core.StringRedisTemplate;
 
 /**
- * 2단계: 같은 1,000명 동시 요청을 발급 방법마다 3번씩 돌려 정확도와 소요 시간을 비교한다.
+ * 2·3단계: 같은 1,000명 동시 요청을 발급 방법마다 3번씩 돌려 정확도와 소요 시간을 비교한다.
  * SQL 출력은 콘솔 쓰기가 시간을 잡아먹으므로 끈다.
  */
 @SpringBootTest(properties = "spring.jpa.show-sql=false")
@@ -43,33 +44,54 @@ class CouponIssueComparisonTest {
 	@Autowired
 	private OptimisticLockCouponIssueService optimisticLockService;
 
+	@Autowired
+	private StringRedisTemplate redisTemplate;
+
+	/** 결과 확인 방법: NONE은 기록만, EXACT는 발급 기록과 issuedQuantity 모두 100, ROWS_ONLY는 발급 기록만 100 */
+	enum Expect {
+		NONE, EXACT, ROWS_ONLY
+	}
+
 	static Stream<Arguments> issuers() {
 		return Stream.of(
-				Arguments.of(NoLockCouponIssueService.class, false),
-				Arguments.of(SynchronizedCouponIssueService.class, false),
-				Arguments.of(PessimisticLockCouponIssueService.class, true),
-				Arguments.of(OptimisticLockCouponIssueService.class, true));
+				Arguments.of(NoLockCouponIssueService.class, Expect.NONE),
+				Arguments.of(SynchronizedCouponIssueService.class, Expect.NONE),
+				Arguments.of(SynchronizedOutsideTransactionCouponIssueService.class, Expect.EXACT),
+				Arguments.of(PessimisticLockCouponIssueService.class, Expect.EXACT),
+				Arguments.of(OptimisticLockCouponIssueService.class, Expect.EXACT),
+				Arguments.of(RedissonLockCouponIssueService.class, Expect.EXACT),
+				// Redis 카운터 방법은 DB의 issuedQuantity를 갱신하지 않는다. 대신 Redis 카운터가 100인지 본다.
+				Arguments.of(RedisCounterCouponIssueService.class, Expect.ROWS_ONLY));
 	}
 
 	@BeforeEach
 	void setUp() {
 		couponIssueRepository.deleteAllInBatch();
 		couponRepository.deleteAllInBatch();
+		// 테스트를 다시 실행하면 쿠폰 id가 1부터 다시 시작하므로 지난번 Redis 카운터와 락을 지운다.
+		var keys = redisTemplate.keys("coupon:*");
+		if (keys != null && !keys.isEmpty()) {
+			redisTemplate.delete(keys);
+		}
 	}
 
-	/** expectExact가 true인 방법은 정확히 100장이어야 한다. false인 방법은 결과만 기록한다. */
 	@ParameterizedTest(name = "{0}")
 	@MethodSource("issuers")
-	void compare(Class<? extends CouponIssuer> issuerType, boolean expectExact) throws InterruptedException {
+	void compare(Class<? extends CouponIssuer> issuerType, Expect expect) throws InterruptedException {
 		CouponIssuer issuer = context.getBean(issuerType);
 		for (int round = 1; round <= 3; round++) {
 			Result result = runOnce(issuer);
-			System.out.printf("[비교] %s %d회차: 발급 %d건, issuedQuantity %d, 소요 %dms, 재시도 %d회%n",
+			System.out.printf("[비교] %s %d회차: 발급 %d건, issuedQuantity %d, Redis 카운터 %s, 소요 %dms, 재시도 %d회%n",
 					issuerType.getSimpleName(), round, result.issueRows, result.issuedQuantity,
-					result.elapsedMillis, result.retries);
-			if (expectExact) {
+					result.redisCount, result.elapsedMillis, result.retries);
+			if (expect != Expect.NONE) {
 				assertThat(result.issueRows).isEqualTo(TOTAL_QUANTITY);
+			}
+			if (expect == Expect.EXACT) {
 				assertThat(result.issuedQuantity).isEqualTo(TOTAL_QUANTITY);
+			}
+			if (expect == Expect.ROWS_ONLY) {
+				assertThat(result.redisCount).isEqualTo(String.valueOf(TOTAL_QUANTITY));
 			}
 		}
 	}
@@ -114,9 +136,12 @@ class CouponIssueComparisonTest {
 		if (unexpectedErrors.get() > 0) {
 			System.out.printf("[비교] 예상하지 못한 예외 %d건%n", unexpectedErrors.get());
 		}
-		return new Result(issueRows, saved.getIssuedQuantity(), elapsedMillis, optimisticLockService.getRetryCount());
+		String redisCount = redisTemplate.opsForValue()
+				.get(RedisCounterCouponIssueService.ISSUED_COUNT_KEY.formatted(coupon.getId()));
+		return new Result(issueRows, saved.getIssuedQuantity(), redisCount, elapsedMillis,
+				optimisticLockService.getRetryCount());
 	}
 
-	private record Result(long issueRows, int issuedQuantity, long elapsedMillis, long retries) {
+	private record Result(long issueRows, int issuedQuantity, String redisCount, long elapsedMillis, long retries) {
 	}
 }
