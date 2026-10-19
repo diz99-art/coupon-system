@@ -1,8 +1,7 @@
 package com.coupon.coupon.service;
 
 import com.coupon.coupon.domain.CouponIssue;
-import com.coupon.coupon.domain.CouponIssueException;
-import com.coupon.coupon.domain.CouponIssueException.ErrorCode;
+import com.coupon.coupon.domain.exception.CouponIssueBusyException;
 import java.util.concurrent.TimeUnit;
 import lombok.RequiredArgsConstructor;
 import org.redisson.api.RLock;
@@ -35,13 +34,13 @@ public class RedissonLockCouponIssueService implements CouponIssuer {
 		try {
 			locked = lock.tryLock(WAIT_TIME_SECONDS, LEASE_TIME_SECONDS, TimeUnit.SECONDS);
 			if (!locked) {
-				throw new CouponIssueException(ErrorCode.BUSY);
+				throw new CouponIssueBusyException();
 			}
 			// 이 호출이 돌아오면 트랜잭션은 이미 커밋됐다.
 			return noLockCouponIssueService.issue(couponId, userId);
 		} catch (InterruptedException e) {
 			Thread.currentThread().interrupt();
-			throw new CouponIssueException(ErrorCode.BUSY);
+			throw new CouponIssueBusyException();
 		} finally {
 			// leaseTime이 지나 이미 풀렸으면 남의 락을 풀지 않도록 확인한다.
 			if (locked && lock.isHeldByCurrentThread()) {

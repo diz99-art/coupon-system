@@ -1,12 +1,13 @@
 package com.coupon.coupon.domain;
 
+import com.coupon.coupon.domain.exception.CouponNotInIssuePeriodException;
+import com.coupon.coupon.domain.exception.CouponSoldOutException;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.Version;
-import com.coupon.coupon.domain.CouponIssueException.ErrorCode;
 import java.time.LocalDateTime;
 import lombok.AccessLevel;
 import lombok.Getter;
@@ -60,10 +61,10 @@ public class Coupon {
 	/** 발급 기간 안이고 남은 수량이 있는지 확인한다. 아니면 예외를 던진다. */
 	public void validateIssuable(LocalDateTime now) {
 		if (!isInIssuePeriod(now)) {
-			throw new CouponIssueException(ErrorCode.NOT_IN_ISSUE_PERIOD);
+			throw new CouponNotInIssuePeriodException();
 		}
 		if (!hasRemainingQuantity()) {
-			throw new CouponIssueException(ErrorCode.SOLD_OUT);
+			throw new CouponSoldOutException();
 		}
 	}
 

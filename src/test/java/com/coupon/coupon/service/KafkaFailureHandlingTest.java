@@ -10,14 +10,11 @@ import static org.mockito.Mockito.timeout;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 
+import com.coupon.coupon.IntegrationTest;
 import com.coupon.coupon.KafkaTestSupport;
-import com.coupon.coupon.RedisTestSupport;
 import com.coupon.coupon.domain.Coupon;
 import com.coupon.coupon.messaging.CouponIssueMessage;
 import com.coupon.coupon.messaging.CouponIssueProducer;
-import com.coupon.coupon.repository.CouponIssueRedisRepository;
-import com.coupon.coupon.repository.CouponIssueRepository;
-import com.coupon.coupon.repository.CouponRepository;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.List;
@@ -33,7 +30,6 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.dao.DataAccessResourceFailureException;
-import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.kafka.config.KafkaListenerEndpointRegistry;
 import org.springframework.kafka.test.EmbeddedKafkaBroker;
 import org.springframework.kafka.test.context.EmbeddedKafka;
@@ -52,7 +48,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 // 토픽은 KafkaConfig의 NewTopic 빈이 만든다 (파티션 수를 운영과 같게).
 @EmbeddedKafka
 @DirtiesContext
-class KafkaFailureHandlingTest {
+class KafkaFailureHandlingTest extends IntegrationTest {
 
 	private static final int MAX_RETRIES = 3;
 
@@ -69,18 +65,6 @@ class KafkaFailureHandlingTest {
 	private CouponReconciliationService couponReconciliationService;
 
 	@Autowired
-	private CouponRepository couponRepository;
-
-	@Autowired
-	private CouponIssueRepository couponIssueRepository;
-
-	@Autowired
-	private CouponIssueRedisRepository couponIssueRedisRepository;
-
-	@Autowired
-	private StringRedisTemplate redisTemplate;
-
-	@Autowired
 	private EmbeddedKafkaBroker embeddedKafka;
 
 	@Autowired
@@ -95,9 +79,6 @@ class KafkaFailureHandlingTest {
 	void setUp() {
 		// 컨슈머들이 파티션을 다 나눠 가진 뒤에 시작한다. 도중에 재배정이 일어나면 메시지가 다시 전달되어 시도 횟수가 늘어난다.
 		KafkaTestSupport.waitForAssignment(listenerRegistry);
-		couponIssueRepository.deleteAllInBatch();
-		couponRepository.deleteAllInBatch();
-		RedisTestSupport.clearCouponKeys(redisTemplate);
 		LocalDateTime now = LocalDateTime.now();
 		coupon = couponRepository.save(new Coupon("Kafka 쿠폰", 100, now.minusHours(1), now.plusHours(1)));
 	}

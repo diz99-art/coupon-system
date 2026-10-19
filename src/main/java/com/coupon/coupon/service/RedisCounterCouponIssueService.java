@@ -2,13 +2,16 @@ package com.coupon.coupon.service;
 
 import com.coupon.coupon.domain.Coupon;
 import com.coupon.coupon.domain.CouponIssue;
-import com.coupon.coupon.domain.CouponIssueException;
-import com.coupon.coupon.domain.CouponIssueException.ErrorCode;
+import com.coupon.coupon.domain.exception.CouponAlreadyIssuedException;
+import com.coupon.coupon.domain.exception.CouponNotFoundException;
+import com.coupon.coupon.domain.exception.CouponNotInIssuePeriodException;
+import com.coupon.coupon.domain.exception.CouponSoldOutException;
 import com.coupon.coupon.repository.CouponIssueRedisRepository;
 import com.coupon.coupon.repository.CouponIssueRedisRepository.IssueResult;
 import com.coupon.coupon.repository.CouponIssueRepository;
 import com.coupon.coupon.repository.CouponRepository;
 import java.time.LocalDateTime;
+import java.time.temporal.ChronoUnit;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
@@ -27,21 +30,22 @@ public class RedisCounterCouponIssueService implements CouponIssuer {
 
 	@Override
 	public CouponIssue issue(Long couponId, Long userId) {
-		LocalDateTime now = LocalDateTime.now();
+		// Redis score(밀리초)와 DB 값이 정확히 같도록 밀리초까지만 쓴다.
+		LocalDateTime now = LocalDateTime.now().truncatedTo(ChronoUnit.MILLIS);
 
 		// 기간과 총 수량을 알기 위해 쿠폰을 읽는다. 락을 걸지 않으니 동시에 읽어도 줄을 서지 않는다.
 		Coupon coupon = couponRepository.findById(couponId)
-				.orElseThrow(() -> new CouponIssueException(ErrorCode.COUPON_NOT_FOUND));
+				.orElseThrow(() -> new CouponNotFoundException());
 		if (!coupon.isInIssuePeriod(now)) {
-			throw new CouponIssueException(ErrorCode.NOT_IN_ISSUE_PERIOD);
+			throw new CouponNotInIssuePeriodException();
 		}
 
-		IssueResult result = couponIssueRedisRepository.tryIssue(couponId, userId, coupon.getTotalQuantity());
+		IssueResult result = couponIssueRedisRepository.tryIssue(couponId, userId, coupon.getTotalQuantity(), now);
 		if (result == IssueResult.ALREADY_ISSUED) {
-			throw new CouponIssueException(ErrorCode.ALREADY_ISSUED);
+			throw new CouponAlreadyIssuedException();
 		}
 		if (result == IssueResult.SOLD_OUT) {
-			throw new CouponIssueException(ErrorCode.SOLD_OUT);
+			throw new CouponSoldOutException();
 		}
 
 		// Redis에서 자리를 얻은 요청만 DB에 기록한다. 이 저장이 실패하면 Redis와 DB가 어긋난다 (4단계에서 대사 작업으로 보정).

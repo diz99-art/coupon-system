@@ -2,11 +2,9 @@ package com.coupon.coupon.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import com.coupon.coupon.RedisTestSupport;
+import com.coupon.coupon.IntegrationTest;
 import com.coupon.coupon.domain.Coupon;
-import com.coupon.coupon.repository.CouponIssueRedisRepository;
-import com.coupon.coupon.repository.CouponIssueRepository;
-import com.coupon.coupon.repository.CouponRepository;
+import com.coupon.coupon.domain.exception.CouponException;
 import java.time.LocalDateTime;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -14,21 +12,19 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Stream;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.ApplicationContext;
-import org.springframework.data.redis.core.StringRedisTemplate;
 
 /**
  * 2·3단계: 같은 1,000명 동시 요청을 발급 방법마다 3번씩 돌려 정확도와 소요 시간을 비교한다.
  * SQL 출력은 콘솔 쓰기가 시간을 잡아먹으므로 끈다.
  */
 @SpringBootTest(properties = "spring.jpa.show-sql=false")
-class CouponIssueComparisonTest {
+class CouponIssueComparisonTest extends IntegrationTest {
 
 	private static final int TOTAL_QUANTITY = 100;
 	private static final int USER_COUNT = 1_000;
@@ -38,19 +34,7 @@ class CouponIssueComparisonTest {
 	private ApplicationContext context;
 
 	@Autowired
-	private CouponRepository couponRepository;
-
-	@Autowired
-	private CouponIssueRepository couponIssueRepository;
-
-	@Autowired
 	private OptimisticLockCouponIssueService optimisticLockService;
-
-	@Autowired
-	private StringRedisTemplate redisTemplate;
-
-	@Autowired
-	private CouponIssueRedisRepository couponIssueRedisRepository;
 
 	/** 결과 확인 방법: NONE은 기록만, EXACT는 발급 기록과 issuedQuantity 모두 100, ROWS_ONLY는 발급 기록만 100 */
 	enum Expect {
@@ -67,13 +51,6 @@ class CouponIssueComparisonTest {
 				Arguments.of(RedissonLockCouponIssueService.class, Expect.EXACT),
 				// Redis 카운터 방법은 DB의 issuedQuantity를 갱신하지 않는다. 대신 Redis 카운터가 100인지 본다.
 				Arguments.of(RedisCounterCouponIssueService.class, Expect.ROWS_ONLY));
-	}
-
-	@BeforeEach
-	void setUp() {
-		couponIssueRepository.deleteAllInBatch();
-		couponRepository.deleteAllInBatch();
-		RedisTestSupport.clearCouponKeys(redisTemplate);
 	}
 
 	@ParameterizedTest(name = "{0}")
@@ -116,7 +93,7 @@ class CouponIssueComparisonTest {
 					ready.countDown();
 					start.await();
 					issuer.issue(coupon.getId(), userId);
-				} catch (com.coupon.coupon.domain.CouponIssueException expected) {
+				} catch (CouponException expected) {
 					// 매진, 기간 밖 등 정상적인 거절
 				} catch (Exception e) {
 					unexpectedErrors.incrementAndGet();

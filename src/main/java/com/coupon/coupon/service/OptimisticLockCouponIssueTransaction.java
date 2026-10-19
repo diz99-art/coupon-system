@@ -2,8 +2,8 @@ package com.coupon.coupon.service;
 
 import com.coupon.coupon.domain.Coupon;
 import com.coupon.coupon.domain.CouponIssue;
-import com.coupon.coupon.domain.CouponIssueException;
-import com.coupon.coupon.domain.CouponIssueException.ErrorCode;
+import com.coupon.coupon.domain.exception.CouponAlreadyIssuedException;
+import com.coupon.coupon.domain.exception.CouponNotFoundException;
 import com.coupon.coupon.repository.CouponIssueRepository;
 import com.coupon.coupon.repository.CouponRepository;
 import java.time.LocalDateTime;
@@ -28,10 +28,10 @@ class OptimisticLockCouponIssueTransaction {
 		LocalDateTime now = LocalDateTime.now();
 
 		Coupon coupon = couponRepository.findById(couponId)
-				.orElseThrow(() -> new CouponIssueException(ErrorCode.COUPON_NOT_FOUND));
+				.orElseThrow(() -> new CouponNotFoundException());
 		coupon.validateIssuable(now);
 		if (couponIssueRepository.existsByCouponIdAndUserId(couponId, userId)) {
-			throw new CouponIssueException(ErrorCode.ALREADY_ISSUED);
+			throw new CouponAlreadyIssuedException();
 		}
 
 		coupon.increaseIssuedQuantity();

@@ -2,13 +2,10 @@ package com.coupon.coupon.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.coupon.coupon.IntegrationTest;
 import com.coupon.coupon.KafkaTestSupport;
-import com.coupon.coupon.RedisTestSupport;
 import com.coupon.coupon.domain.Coupon;
-import com.coupon.coupon.domain.CouponIssueException;
-import com.coupon.coupon.repository.CouponIssueRedisRepository;
-import com.coupon.coupon.repository.CouponIssueRepository;
-import com.coupon.coupon.repository.CouponRepository;
+import com.coupon.coupon.domain.exception.CouponException;
 import java.time.LocalDateTime;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -20,7 +17,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.kafka.config.KafkaListenerEndpointRegistry;
 import org.springframework.test.annotation.DirtiesContext;
 
@@ -39,7 +35,7 @@ import org.springframework.test.annotation.DirtiesContext;
 		"coupon.kafka.group-id=measure-${random.uuid}",
 		"spring.kafka.consumer.auto-offset-reset=latest"})
 @DirtiesContext
-class KafkaAsyncMeasurementTest {
+class KafkaAsyncMeasurementTest extends IntegrationTest {
 
 	private static final int USER_COUNT = 1_000;
 	private static final int THREAD_COUNT = 32;
@@ -51,26 +47,11 @@ class KafkaAsyncMeasurementTest {
 	private RedisCounterCouponIssueService redisCounterCouponIssueService;
 
 	@Autowired
-	private CouponRepository couponRepository;
-
-	@Autowired
-	private CouponIssueRepository couponIssueRepository;
-
-	@Autowired
-	private CouponIssueRedisRepository couponIssueRedisRepository;
-
-	@Autowired
-	private StringRedisTemplate redisTemplate;
-
-	@Autowired
 	private KafkaListenerEndpointRegistry listenerRegistry;
 
 	@BeforeEach
 	void setUp() {
 		KafkaTestSupport.waitForAssignment(listenerRegistry);
-		couponIssueRepository.deleteAllInBatch();
-		couponRepository.deleteAllInBatch();
-		RedisTestSupport.clearCouponKeys(redisTemplate);
 	}
 
 	@Test
@@ -108,7 +89,7 @@ class KafkaAsyncMeasurementTest {
 					ready.countDown();
 					start.await();
 					issuer.accept(coupon.getId(), userId);
-				} catch (CouponIssueException expected) {
+				} catch (CouponException expected) {
 					// 매진 등 정상적인 거절
 				} catch (Exception e) {
 					unexpectedErrors.incrementAndGet();

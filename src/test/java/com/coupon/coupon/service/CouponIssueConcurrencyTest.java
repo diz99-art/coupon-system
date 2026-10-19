@@ -2,16 +2,14 @@ package com.coupon.coupon.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.coupon.coupon.IntegrationTest;
 import com.coupon.coupon.domain.Coupon;
-import com.coupon.coupon.repository.CouponIssueRepository;
-import com.coupon.coupon.repository.CouponRepository;
 import java.time.LocalDateTime;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -22,7 +20,7 @@ import org.springframework.boot.test.context.SpringBootTest;
  * 문제를 보여주는 테스트라서 "초과 발급된다"를 검증한다. 2단계에서 해결한 뒤에는 정확히 100장인지 검증하도록 바꾼다.
  */
 @SpringBootTest
-class CouponIssueConcurrencyTest {
+class CouponIssueConcurrencyTest extends IntegrationTest {
 
 	private static final int TOTAL_QUANTITY = 100;
 	private static final int USER_COUNT = 1_000;
@@ -30,18 +28,6 @@ class CouponIssueConcurrencyTest {
 
 	@Autowired
 	private NoLockCouponIssueService couponIssueService;
-
-	@Autowired
-	private CouponRepository couponRepository;
-
-	@Autowired
-	private CouponIssueRepository couponIssueRepository;
-
-	@BeforeEach
-	void setUp() {
-		couponIssueRepository.deleteAllInBatch();
-		couponRepository.deleteAllInBatch();
-	}
 
 	@Test
 	@DisplayName("동시성 처리 없이 1,000명이 동시에 요청하면 100장 쿠폰이 초과 발급된다")

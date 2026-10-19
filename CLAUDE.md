@@ -22,11 +22,13 @@
 ## 명령어
 
 - MySQL·Redis·Kafka 실행: `docker compose up -d` (종료: `docker compose down`)
-- 서버 실행: `./gradlew bootRun`
+- 서버 실행: `./gradlew bootRun` (기본 local 프로필: 켤 때마다 DB 테이블과 Redis 쿠폰 키 초기화)
+- API 문서: 서버 실행 후 http://localhost:8080/swagger-ui.html
 - 테스트: `./gradlew test` (docker compose가 떠 있어야 한다)
 
 ## 테스트 주의
 
-- `src/test/resources/config/application.yml`이 테스트에서 Kafka 리스너와 대사 스케줄러를 끈다. 필요한 테스트만 켠다.
+- `src/test/resources/config/application.yml`이 test 프로필, 테스트 전용 토픽(coupon-issue-test)을 쓰고 Kafka 리스너와 대사 스케줄러를 끈다. 필요한 테스트만 켠다.
+- DB·Redis를 쓰는 테스트는 `IntegrationTest`를 상속한다 (테스트 전후로 DB와 Redis 쿠폰 키 정리).
 - Kafka 실패 처리 테스트는 내장 Kafka(@EmbeddedKafka), 측정 테스트는 docker Kafka의 측정 전용 토픽을 쓴다.
   개발 서버가 읽는 `coupon-issue` 토픽에 테스트 메시지를 넣지 않는다.

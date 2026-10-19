@@ -1,6 +1,9 @@
 spring:
   application:
     name: coupon
+  profiles:
+    # 프로필을 정하지 않고 실행하면 개발 환경(local)으로 뜬다. 테스트는 test 프로필을 쓴다.
+    default: local
 
   datasource:
     url: jdbc:mysql://localhost:3306/coupon?serverTimezone=Asia/Seoul&characterEncoding=UTF-8
@@ -9,12 +12,10 @@ spring:
     driver-class-name: com.mysql.cj.jdbc.Driver
 
   jpa:
+    # 운영 기준값: 스키마를 건드리지 않는다. 개발·테스트 프로필에서 create로 바꾼다.
     hibernate:
-      ddl-auto: create
-    show-sql: true
-    properties:
-      hibernate:
-        format_sql: true
+      ddl-auto: none
+    open-in-view: false
 
   data:
     redis:
@@ -36,6 +37,10 @@ spring:
       properties:
         spring.deserializer.value.delegate.class: org.springframework.kafka.support.serializer.JacksonJsonDeserializer
         spring.json.trusted.packages: com.coupon.coupon.messaging
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
 
 coupon:
   kafka:

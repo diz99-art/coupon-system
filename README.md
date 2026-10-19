@@ -3,19 +3,26 @@
 정해진 수량의 쿠폰을 선착순으로 발급하는 백엔드. 동시 요청이 몰릴 때 생기는 문제를 단계별로 확인하고 해결한다.
 
 - Java 21, Spring Boot 4.1, Spring Data JPA, MySQL 8.4, Redis 7 (Redisson), Kafka 4.3 (KRaft)
-- 실행: `docker compose up -d` → `./gradlew bootRun`
+- 실행: `docker compose up -d` → `./gradlew bootRun` (local 프로필, 켤 때마다 DB 테이블과 Redis 쿠폰 키 초기화)
+- API 문서: 서버 실행 후 http://localhost:8080/swagger-ui.html
 - 테스트: `./gradlew test` (`docker compose up -d`로 MySQL, Redis, Kafka가 떠 있어야 한다)
 
 ## API
 
-`POST /coupons/{couponId}/issue` (4단계부터 Redis 판정 + Kafka 비동기 저장)
+| 메서드 | 주소 | 설명 | 성공 |
+|---|---|---|---|
+| POST | `/coupons` | 쿠폰 생성 | 201 + Location |
+| GET | `/coupons/{couponId}` | 쿠폰 조회 (남은 수량은 Redis 기준) | 200 |
+| POST | `/coupons/{couponId}/issue` | 발급 (Redis 판정 + Kafka 비동기 저장) | 202 |
+| GET | `/users/{userId}/coupons` | 내 발급 내역 (최근 순, DB 기준) | 200 |
+
+에러는 모두 같은 형식이다. `errors`는 요청 값 검증에 실패한 필드 목록이고, 그 밖의 에러에서는 빈 배열이다.
 
 ```json
-{ "userId": 1 }
+{ "code": "COUPON_SOLD_OUT", "message": "쿠폰이 모두 소진되었습니다.", "errors": [] }
 ```
 
-- 발급 확정 202: `{"couponId":1,"userId":1,"issuedAt":"..."}` (DB 저장은 곧이어 컨슈머가 한다)
-- 실패: 쿠폰 없음 404 `COUPON_NOT_FOUND`, 기간 밖 400 `NOT_IN_ISSUE_PERIOD`, 매진 409 `SOLD_OUT`, 중복 409 `ALREADY_ISSUED`, 일시적 장애 503 `BUSY`
+자세한 요청·응답 형식은 Swagger(`/swagger-ui.html`)에 있다.
 
 ## 1단계: 동시성 문제 확인
 
@@ -338,3 +345,66 @@ return 1                                                                -- 발�
 > 대신 Redis와 DB가 어긋날 수 있어서 세 겹으로 막았습니다. 저장 실패는 일정 간격으로 재시도하고, 그래도 실패하면 DLT로 보내 파티션이 막히지 않게 했습니다.
 > Kafka는 같은 메시지를 다시 보낼 수 있어서 유니크 제약으로 저장을 멱등하게 만들었고, 마지막으로 정기 대사 작업이 Redis와 DB를 비교해 빠진 건을 채웁니다.
 > 테스트로 DB 저장을 일부러 실패시켜 재시도, DLT, 대사 보정이 실제로 동작하는 것을 확인했습니다.
+
+## 5단계: API 정리
+
+### 4단계 문제 수정
+
+- **개발 환경 초기화**: `local` 프로필(기본 프로필)에서 서버를 켜면 DB 테이블을 새로 만들고(`ddl-auto: create`), `LocalRedisInitializer`가 Redis의 `coupon:*` 키도 지운다.
+  빈이 만들어질 때 실행되므로 Kafka 리스너와 대사 스케줄러가 시작되기 전에 끝난다. 키는 `KEYS` 대신 `SCAN`으로 찾아 Redis를 오래 막지 않는다.
+  기본 설정(`application.yml`)은 `ddl-auto: none`이고, 개발(`application-local.yml`)과 테스트에서만 `create`를 쓴다.
+- **SET → Sorted Set**: 받은 유저를 `coupon:{id}:users` Sorted Set에 넣고 score에 발급 시각(epoch 밀리초)을 저장한다.
+  Lua 스크립트는 `SISMEMBER` → `ZSCORE`, `SADD` → `ZADD`, `SREM` → `ZREM`, `SCARD` → `ZCARD`로 바꿨다.
+  발급 시각은 밀리초까지만 써서 Redis score와 DB 값이 정확히 같다.
+- **대사 작업**: Redis에만 있는 발급은 Redis의 원래 발급 시각으로 DB에 저장하고, DB에만 있는 발급은 DB의 발급 시각으로 Redis에 넣는다.
+  `CouponReconciliationTest`에서 유저마다 다른 시각으로 어긋나게 만든 뒤, 대사 후 양쪽의 (유저, 발급 시각)이 완전히 같은지 확인한다.
+- **테스트 환경**: 테스트는 `test` 프로필과 테스트 전용 Kafka 토픽(`coupon-issue-test`)을 쓴다.
+  DB와 Redis를 쓰는 테스트는 `IntegrationTest`를 상속하고, 테스트마다 **시작 전과 끝난 뒤** 발급 기록, 쿠폰, Redis 쿠폰 키를 지운다.
+  시작 전 정리는 지난 테스트가 중간에 죽어 남긴 데이터를, 끝난 뒤 정리는 다음 테스트와 개발 서버에 남길 데이터를 막는다.
+
+### 예외 처리
+
+상황마다 예외 클래스를 두고(`CouponNotFoundException`, `CouponNotInIssuePeriodException`, `CouponSoldOutException`, `CouponAlreadyIssuedException`, `CouponIssueBusyException`), 모두 `CouponException`을 상속한다.
+`GlobalExceptionHandler`(`@RestControllerAdvice`) 한 곳에서 `{code, message, errors}` 형식으로 바꾼다.
+도메인 예외는 HTTP를 모르고, 상태 코드는 컨트롤러 계층에서 정한다.
+
+| 상황 | code | 상태 | 고른 이유 |
+|---|---|---|---|
+| 요청 값 검증 실패, JSON·날짜 형식 오류, id가 숫자가 아님 | `INVALID_REQUEST` | 400 | 클라이언트가 요청을 고쳐야만 성공할 수 있다. |
+| 쿠폰 없음 | `COUPON_NOT_FOUND` | 404 | 주소가 가리키는 자원이 없다. |
+| 발급 기간 아님 | `COUPON_NOT_IN_ISSUE_PERIOD` | 409 | 요청은 올바른데 쿠폰의 지금 상태와 맞지 않는다. 같은 요청이 시작 시각 뒤에는 성공하므로 요청 오류(400)가 아니다. |
+| 수량 소진 | `COUPON_SOLD_OUT` | 409 | 요청은 올바른데 남은 수량이라는 자원 상태와 충돌한다. |
+| 중복 발급 | `COUPON_ALREADY_ISSUED` | 409 | 이미 만들어진 발급 기록과 충돌한다. |
+| 락 대기 초과, Kafka 전송 실패 | `COUPON_ISSUE_BUSY` | 503 + `Retry-After: 1` | 서버 쪽 일시적인 문제라 잠시 뒤 다시 하면 된다. |
+| 그 밖의 예외 | `INTERNAL_ERROR` | 500 | 내용은 로그에만 남기고 응답에는 넣지 않는다 (내부 정보 노출 방지). |
+
+- 409 세 가지는 상태 코드가 같아서 클라이언트는 `code`로 구분한다. 화면에서 "매진", "이미 받음", "아직 시작 전"을 다르게 보여줄 수 있다.
+- 대안도 검토했다. 기간 밖을 400으로 두는 곳도 많지만 요청 자체는 틀리지 않았다. 403은 권한 문제로 오해된다. 422는 "본문 내용이 의미상 틀림"에 더 가깝다.
+- 없는 주소(404), 허용되지 않은 메서드(405)처럼 스프링이 상태를 정해 둔 예외는 그 상태를 그대로 쓰되 같은 형식으로 응답한다.
+
+### 요청 값 검증 (`spring-boot-starter-validation`)
+
+- 쿠폰 생성: 이름 공백 불가·100자 이하, 총 수량 1 이상 1,000,000 이하, 시작·종료 시각 필수, 종료가 시작보다 늦을 것(`@AssertTrue`로 두 필드를 함께 검사).
+- 발급: `userId` 필수, 1 이상.
+- 틀린 필드를 한 번에 모두 `errors`로 알려준다.
+
+### API 문서
+
+`springdoc-openapi-starter-webmvc-ui` 3.1.1. 서버 실행 후 http://localhost:8080/swagger-ui.html 에서 요청을 직접 보내 볼 수 있다. 문서 JSON은 `/v3/api-docs`.
+
+### 테스트 (`CouponApiTest`, 19개)
+
+- 생성: 201과 Location, 수량 0, 종료가 시작보다 빠름, 여러 필드 동시 오류, 날짜 형식 오류
+- 조회: Redis 기준 남은 수량, 없는 쿠폰 404, 숫자가 아닌 id 400
+- 발급: 202, 중복 409, 매진 409, 기간 전 409, 없는 쿠폰 404, userId 없음 400, Kafka 전송 실패 시 503 + Retry-After + Redis 되돌림
+- 내 발급 내역: 최근 순 정렬과 쿠폰 이름, 빈 목록
+- 없는 주소 404 형식, Swagger 문서와 화면
+
+Kafka 전송은 `@MockitoBean`으로 바꿔서 테스트가 메시지를 실제로 보내지 않는다.
+
+### 면접 답변: "에러 응답은 어떻게 설계했나요?"
+
+> 모든 에러를 `@RestControllerAdvice` 한 곳에서 `{code, message, errors}` 형식으로 통일했습니다. 상태 코드는 큰 분류, code는 화면이 분기할 정확한 이유입니다.
+> 매진, 중복, 기간 밖은 모두 요청은 올바르지만 쿠폰의 지금 상태와 충돌하는 경우라 409로 묶고 code로 구분했습니다. 서버가 붐벼서 실패한 경우는 503과 Retry-After로 다시 시도해도 된다는 걸 알렸습니다.
+> 도메인 예외는 HTTP 상태를 모르게 하고, 상태 코드는 컨트롤러 계층에서만 정했습니다. 그래서 같은 서비스를 Kafka 컨슈머나 배치에서 불러도 HTTP에 묶이지 않습니다.
+> 500은 원인을 로그에만 남기고 응답에는 일반 메시지만 줘서 내부 구조가 드러나지 않게 했습니다.

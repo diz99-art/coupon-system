@@ -1,0 +1,9 @@
+# 개발 환경. 서버를 켤 때마다 테이블을 새로 만들고 Redis 쿠폰 키도 지운다 (LocalRedisInitializer).
+spring:
+  jpa:
+    hibernate:
+      ddl-auto: create
+    show-sql: true
+    properties:
+      hibernate:
+        format_sql: true
