@@ -7,6 +7,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doThrow;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -140,6 +141,43 @@ class CouponApiTest extends IntegrationTest {
 			mockMvc.perform(get("/coupons/{id}", "abc"))
 					.andExpect(status().isBadRequest())
 					.andExpect(jsonPath("$.code").value("INVALID_REQUEST"));
+		}
+	}
+
+	@Nested
+	@DisplayName("PUT /coupons/{id} 쿠폰 수정")
+	class Update {
+
+		@Test
+		@DisplayName("200과 바뀐 쿠폰, 바로 다음 발급부터 새 수량이 적용된다")
+		void updated() throws Exception {
+			Coupon coupon = openCoupon(1);
+			issue(coupon.getId(), 1L).andExpect(status().isAccepted());
+			expectError(issue(coupon.getId(), 2L), 409, "COUPON_SOLD_OUT");
+
+			updateCoupon(coupon.getId(), "늘린 쿠폰", 2, coupon.getIssueStartAt(), coupon.getIssueEndAt())
+					.andExpect(status().isOk())
+					.andExpect(jsonPath("$.name").value("늘린 쿠폰"))
+					.andExpect(jsonPath("$.totalQuantity").value(2))
+					.andExpect(jsonPath("$.remainingQuantity").value(1));
+			issue(coupon.getId(), 2L).andExpect(status().isAccepted());
+		}
+
+		@Test
+		@DisplayName("이미 발급된 수량보다 적게 줄이면 409 COUPON_QUANTITY_BELOW_ISSUED")
+		void belowIssued() throws Exception {
+			Coupon coupon = openCoupon(10);
+			issue(coupon.getId(), 1L).andExpect(status().isAccepted());
+			issue(coupon.getId(), 2L).andExpect(status().isAccepted());
+			expectError(updateCoupon(coupon.getId(), "쿠폰", 1, coupon.getIssueStartAt(), coupon.getIssueEndAt()),
+					409, "COUPON_QUANTITY_BELOW_ISSUED");
+		}
+
+		@Test
+		@DisplayName("없는 쿠폰이면 404")
+		void notFound() throws Exception {
+			LocalDateTime now = LocalDateTime.now();
+			expectError(updateCoupon(999_999L, "쿠폰", 1, now, now.plusHours(1)), 404, "COUPON_NOT_FOUND");
 		}
 	}
 
@@ -285,6 +323,13 @@ class CouponApiTest extends IntegrationTest {
 		String body = "{\"name\":\"%s\",\"totalQuantity\":%d,\"issueStartAt\":\"%s\",\"issueEndAt\":\"%s\"}"
 				.formatted(name, quantity, start.format(FORMAT), end.format(FORMAT));
 		return mockMvc.perform(post("/coupons").contentType(MediaType.APPLICATION_JSON).content(body));
+	}
+
+	private ResultActions updateCoupon(Long couponId, String name, int quantity, LocalDateTime start, LocalDateTime end)
+			throws Exception {
+		String body = "{\"name\":\"%s\",\"totalQuantity\":%d,\"issueStartAt\":\"%s\",\"issueEndAt\":\"%s\"}"
+				.formatted(name, quantity, start.format(FORMAT), end.format(FORMAT));
+		return mockMvc.perform(put("/coupons/{id}", couponId).contentType(MediaType.APPLICATION_JSON).content(body));
 	}
 
 	private ResultActions issue(Long couponId, Long userId) throws Exception {

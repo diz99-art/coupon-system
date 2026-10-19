@@ -1,0 +1,16 @@
+── 요청: POST /coupons/4/issue (userId 1) ──
+{"couponId":4,"userId":1,"issuedAt":"2026-10-19T14:41:35.148"}
+
+── SQL (MySQL general log, 연결 번호 / 서버) ──
+4464 | app1 | SET autocommit=0
+4464 | app1 | insert into coupon_issue (coupon_id,issued_at,user_id) values (4,'2026-10-19 23:41:35.148',1)
+4464 | app1 | COMMIT
+4464 | app1 | SET autocommit=1
+
+── Redis 명령 (MONITOR) ──
+"EVALSHA" "c9d91852ce2e252054e52aa6a8653f8d3113056e" "3" "coupon:4:users" "coupon:4:count" "coupon:4:info" "1" "1792420895148"
+1792420895.150525 [0 lua] "HMGET" "coupon:4:info" "total" "start" "end"
+1792420895.150606 [0 lua] "ZSCORE" "coupon:4:users" "1"
+1792420895.150653 [0 lua] "GET" "coupon:4:count"
+1792420895.150676 [0 lua] "INCR" "coupon:4:count"
+1792420895.150719 [0 lua] "ZADD" "coupon:4:users" "1792420895148" "1"

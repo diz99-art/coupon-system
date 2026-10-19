@@ -1,0 +1,46 @@
+{
+  "method": "REDIS_KAFKA",
+  "users": 10000,
+  "requests": 10000,
+  "tps": 2995.038343406339,
+  "avgMs": 1073.224286875995,
+  "p95Ms": 1842.7917236,
+  "maxMs": 2416.249668,
+  "durationMs": 3338.855418,
+  "issued": 100,
+  "rejected": 9900,
+  "failed": 0,
+  "servers": {
+    "app2": 5002,
+    "app1": 4998
+  },
+  "label": "servers2",
+  "server": {
+    "couponId": 24,
+    "totalQuantity": 100,
+    "issueRows": 100,
+    "dbIssuedQuantity": 0,
+    "redisCount": 100
+  },
+  "mysql": {
+    "Com_commit": 10105,
+    "Com_insert": 101,
+    "Com_select": 10007,
+    "Com_set_option": 40218,
+    "Questions": 60436
+  },
+  "redis": {
+    "info": 4,
+    "ping": 2,
+    "zadd": 100,
+    "incr": 100,
+    "evalsha": 10000,
+    "zscore": 10000,
+    "get": 10002
+  },
+  "perRequest": {
+    "mysqlStatements": 6.0436,
+    "mysqlSelects": 1.0007,
+    "redisCommands": 3.0208
+  }
+}

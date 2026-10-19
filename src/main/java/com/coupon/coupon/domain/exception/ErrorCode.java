@@ -12,6 +12,7 @@ public enum ErrorCode {
 	COUPON_NOT_IN_ISSUE_PERIOD("쿠폰 발급 기간이 아닙니다."),
 	COUPON_SOLD_OUT("쿠폰이 모두 소진되었습니다."),
 	COUPON_ALREADY_ISSUED("이미 발급받은 쿠폰입니다."),
+	COUPON_QUANTITY_BELOW_ISSUED("총 수량은 이미 발급된 수량보다 적을 수 없습니다."),
 	COUPON_ISSUE_BUSY("요청이 많아 처리하지 못했습니다. 잠시 뒤 다시 시도해 주세요."),
 	INVALID_REQUEST("요청 값이 올바르지 않습니다."),
 	INTERNAL_ERROR("서버 오류가 발생했습니다.");

@@ -29,6 +29,7 @@
   - 앱의 관리용 포트는 8081 (`/actuator/prometheus`, `/actuator/health`). nginx로는 보이지 않는다.
   - 앱 컨테이너만 다시 만들면 nginx가 옛 주소를 기억하므로 `docker restart coupon-nginx`
 - 부하 테스트: `bench/run.sh <서버 수 1|2> <사용자 수> [방식...]`, 전체 측정은 `bench/all.sh` (k6는 컨테이너로 실행)
+  - `bench/trace-request.sh`: 발급 요청 1건의 SQL(general log)과 Redis 명령(MONITOR). `bench/cache-bench.sh <이름>`: 워밍업 후 3회 측정과 SQL·Redis 명령 수
   - `bench/monitor.sh <반복> [수량]`: Redis+Kafka 10,000명을 반복하고 Grafana 캡처. `bench/reconcile-check.sh [분]`: 대사 작업이 매분 한 서버만 도는지 로그로 확인
 - 테스트: `./gradlew test` (docker compose가 떠 있어야 한다)
 
@@ -36,6 +37,11 @@
 
 - local(기본): 개발 서버. 켤 때마다 DB 테이블, Redis 쿠폰 키, Kafka 발급 토픽의 남은 메시지를 비운다.
 - test: 테스트. docker: 컨테이너 실행(ddl-auto update, 토픽 coupon-issue-cluster). bench: 비교 API(/bench) 켜기.
+
+## 쿠폰 정보 캐시
+
+- 발급 판정은 Redis 해시 `coupon:{id}:info`(총 수량, 기간)를 Lua 안에서 읽는다. DB의 Coupon을 바꾸는 코드는 반드시 `CouponService`를 거쳐 Redis 사본도 바꾼다 (생성: 커밋 뒤 올림, 수정: 원자적 확인 후 변경, 롤백 시 삭제).
+- DB를 직접 고쳤다면 `coupon:{id}:info` 키를 지운다. 다음 발급 요청이 DB에서 다시 읽는다.
 
 ## 스케줄 작업
 

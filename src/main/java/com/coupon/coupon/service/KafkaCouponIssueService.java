@@ -10,6 +10,7 @@ import com.coupon.coupon.domain.exception.CouponSoldOutException;
 import com.coupon.coupon.messaging.CouponIssueMessage;
 import com.coupon.coupon.messaging.CouponIssueProducer;
 import com.coupon.coupon.metrics.CouponMetrics;
+import com.coupon.coupon.repository.CouponInfo;
 import com.coupon.coupon.repository.CouponIssueRedisRepository;
 import com.coupon.coupon.repository.CouponIssueRedisRepository.IssueResult;
 import com.coupon.coupon.repository.CouponRepository;
@@ -22,6 +23,7 @@ import org.springframework.stereotype.Service;
 /**
  * 4단계: Redis로 발급 여부를 정하고, DB 저장은 Kafka 메시지로 넘긴 뒤 바로 응답한다.
  * 응답 시점에는 DB에 아직 기록이 없을 수 있다. 컨슈머(CouponIssueConsumer)가 곧 저장한다.
+ * 8단계: 쿠폰 정보(기간, 총 수량)도 Redis에서 확인해서, 발급 요청 1건이 DB를 쓰지 않고 Redis 명령 1번(Lua)으로 끝난다.
  */
 @Slf4j
 @Service
@@ -49,18 +51,20 @@ public class KafkaCouponIssueService {
 		// Redis score(밀리초)와 DB 값이 정확히 같도록 밀리초까지만 쓴다.
 		LocalDateTime now = LocalDateTime.now().truncatedTo(ChronoUnit.MILLIS);
 
-		Coupon coupon = couponRepository.findById(couponId)
-				.orElseThrow(() -> new CouponNotFoundException());
-		if (!coupon.isInIssuePeriod(now)) {
-			throw new CouponNotInIssuePeriodException();
+		// 8단계: 기간, 수량, 중복을 Redis의 쿠폰 정보로 한 번에 판정한다. 쿠폰 정보가 Redis에 있으면 DB를 읽지 않는다.
+		IssueResult result = couponIssueRedisRepository.tryIssue(couponId, userId, now);
+		if (result == IssueResult.INFO_NOT_LOADED) {
+			// 캐시 미스(Redis 데이터 유실, 개발 서버 초기화 등): DB에서 읽어 올리고 한 번 더 시도한다.
+			loadCouponInfo(couponId);
+			result = couponIssueRedisRepository.tryIssue(couponId, userId, now);
 		}
-
-		IssueResult result = couponIssueRedisRepository.tryIssue(couponId, userId, coupon.getTotalQuantity(), now);
-		if (result == IssueResult.ALREADY_ISSUED) {
-			throw new CouponAlreadyIssuedException();
-		}
-		if (result == IssueResult.SOLD_OUT) {
-			throw new CouponSoldOutException();
+		switch (result) {
+			case OK -> { }
+			case ALREADY_ISSUED -> throw new CouponAlreadyIssuedException();
+			case SOLD_OUT -> throw new CouponSoldOutException();
+			case NOT_IN_ISSUE_PERIOD -> throw new CouponNotInIssuePeriodException();
+			// 올린 직후 지워진 경우(동시에 무효화)뿐이라 드물다. 잠시 뒤 다시 시도하게 한다.
+			case INFO_NOT_LOADED -> throw new CouponIssueBusyException();
 		}
 
 		CouponIssueMessage message = new CouponIssueMessage(couponId, userId, now);
@@ -74,5 +78,10 @@ public class KafkaCouponIssueService {
 			throw new CouponIssueBusyException();
 		}
 		return message;
+	}
+
+	private void loadCouponInfo(Long couponId) {
+		Coupon coupon = couponRepository.findById(couponId).orElseThrow(CouponNotFoundException::new);
+		couponIssueRedisRepository.loadInfo(CouponInfo.from(coupon));
 	}
 }

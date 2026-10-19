@@ -32,7 +32,8 @@ public class GlobalExceptionHandler {
 		ErrorCode code = e.getErrorCode();
 		HttpStatus status = switch (code) {
 			case COUPON_NOT_FOUND -> HttpStatus.NOT_FOUND;
-			case COUPON_NOT_IN_ISSUE_PERIOD, COUPON_SOLD_OUT, COUPON_ALREADY_ISSUED -> HttpStatus.CONFLICT;
+			case COUPON_NOT_IN_ISSUE_PERIOD, COUPON_SOLD_OUT, COUPON_ALREADY_ISSUED, COUPON_QUANTITY_BELOW_ISSUED ->
+					HttpStatus.CONFLICT;
 			case COUPON_ISSUE_BUSY -> HttpStatus.SERVICE_UNAVAILABLE;
 			case INVALID_REQUEST -> HttpStatus.BAD_REQUEST;
 			case INTERNAL_ERROR -> HttpStatus.INTERNAL_SERVER_ERROR;

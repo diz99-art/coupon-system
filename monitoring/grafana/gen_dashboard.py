@@ -69,6 +69,16 @@ ts("응답 상태 코드", "초당 응답 수를 상태 코드별로. 409는 매
    16, y, unit="reqps")
 y += 8
 
+REQ = f'sum by (instance) (rate(http_server_requests_seconds_count{APP}[$__rate_interval]))'
+row("요청 1건당 비용", y); y += 1
+ts("요청 1건당 CPU 시간", "서버별 (CPU 사용 시간 증가량) ÷ (처리한 요청 수). 같은 일을 더 적은 CPU로 하면 내려간다. 초당 요청이 50건 이하인 구간은 값이 들쭉날쭉해서 그리지 않는다",
+   [(f'sum by (instance) (rate(process_cpu_time_ns_total[$__rate_interval])) / 1e6 / ({REQ} > 50)', "{{instance}}")],
+   0, y, w=12, h=7, unit="ms", minv=0)
+ts("요청 1건당 DB 커넥션 사용", "서버별 (커넥션을 빌린 횟수) ÷ (처리한 요청 수). 발급 API가 DB를 쓰지 않으면 0에 가깝다 (Kafka 컨슈머 저장도 함께 센다)",
+   [(f'sum by (instance) (rate(hikaricp_connections_usage_seconds_count[$__rate_interval])) / ({REQ} > 50)', "{{instance}}")],
+   12, y, w=12, h=7, unit="short", minv=0)
+y += 7
+
 row("발급 (커스텀 지표)", y); y += 1
 stat("발급 성공", "선택한 기간 동안 발급 확정 수 (두 서버 합)",
      [(exact("coupon_issue_success_total"), "발급 성공")], 0, y, color="green")

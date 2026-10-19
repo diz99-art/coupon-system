@@ -14,6 +14,7 @@
 |---|---|---|---|
 | POST | `/coupons` | 쿠폰 생성 | 201 + Location |
 | GET | `/coupons/{couponId}` | 쿠폰 조회 (남은 수량은 Redis 기준) | 200 |
+| PUT | `/coupons/{couponId}` | 쿠폰 수정 (발급 판정용 Redis 쿠폰 정보도 함께 바뀜) | 200 |
 | POST | `/coupons/{couponId}/issue` | 발급 (Redis 판정 + Kafka 비동기 저장) | 202 |
 | GET | `/users/{userId}/coupons` | 내 발급 내역 (최근 순, DB 기준) | 200 |
 
@@ -653,3 +654,123 @@ app2:8081 ─┴─────────────────────�
 > ShedLock을 Redis에 붙여서 락을 잡은 서버만 실행하고 나머지는 건너뛰게 했습니다. lockAtMostFor는 서버가 죽어도 다음 회차를 막지 않도록 실행 간격보다 짧은 50초, lockAtLeastFor는 서버 간 시계 차이로 같은 회차가 두 번 돌지 않도록 10초로 정했습니다. 컨테이너 로그로 매분 한 대만 실행되는 것을 확인했습니다.
 > 모니터링은 Actuator와 Micrometer로 지표를 내고 Prometheus, Grafana로 봤습니다. 발급 성공·거절 사유, Kafka 저장 지연 같은 업무 지표도 직접 만들었습니다.
 > 10,000명 부하에서 가장 먼저 보인 경보는 DB 커넥션 대기 188개였지만, 풀을 4배로 늘려도 처리량이 그대로이고 커넥션을 쥐는 시간만 4배가 됐습니다. 그래서 진짜 병목은 CPU이고 커넥션 대기는 증상이라고 판단했습니다. 하나의 지표만 보고 풀을 늘렸다면 효과 없이 DB 부담만 키웠을 겁니다.
+
+## 8단계: 캐시로 CPU 병목 개선
+
+7단계에서 진짜 한계는 CPU였고, 발급 API가 DB를 쓰는 곳은 쿠폰 조회 하나였다. 이 조회를 없애 요청 1건의 CPU 비용을 줄인다.
+
+### 발급 요청 1건이 실행하는 명령 (변경 전)
+
+`bench/trace-request.sh`: MySQL general log와 Redis `MONITOR`로 요청 한 건을 따라갔다 (`bench/results/cache/trace-before.txt`).
+
+```
+── SQL ──
+app1 | SET SESSION TRANSACTION READ ONLY          ┐
+app1 | SET autocommit=0                           │ 발급 API: 쿠폰 조회 (findById)
+app1 | select ... from coupon c1_0 where c1_0.id=5│ SELECT는 1개지만 DB 왕복은 6번
+app1 | COMMIT                                     │
+app1 | SET autocommit=1                           │
+app1 | SET SESSION TRANSACTION READ WRITE         ┘
+app2 | SET autocommit=0                           ┐
+app2 | insert into coupon_issue (...) values (...)│ Kafka 컨슈머: 발급 기록 저장 (응답 뒤, 다른 서버일 수 있다)
+app2 | COMMIT                                     │
+app2 | SET autocommit=1                           ┘
+── Redis ──
+EVALSHA (Lua 1번) → 안에서 ZSCORE, GET, INCR, ZADD
+```
+
+- `findById`는 Spring Data가 읽기 전용 트랜잭션(`@Transactional(readOnly = true)`)으로 감싼다. 그래서 MySQL 드라이버가 SELECT 앞뒤로 읽기 전용 설정, 자동 커밋 끄기, 커밋, 되돌리기를 보낸다. **SELECT 1개가 DB 왕복 6번**이다.
+- 부하 측정에서도 요청 1건당 MySQL 문장이 **6.04개** (SELECT 1.00개)였다 (`SHOW GLOBAL STATUS` 증가량 ÷ 요청 수).
+
+### 캐시 방식 비교
+
+| | 로컬 캐시 (Caffeine) | Redis 캐시 (`@Cacheable`) | Redis Lua 안에서 쿠폰 정보까지 검사 |
+|---|---|---|---|
+| 쿠폰 정보 위치 | 서버마다 JVM 메모리 | Redis 1곳 (`GET`으로 읽음) | Redis 1곳 (Lua가 직접 읽음) |
+| 요청 1건 비용 | DB 0, Redis 1번 (Lua). 가장 빠름 | DB 0, Redis **2번** (캐시 GET + Lua), JSON 역직렬화 | DB 0, Redis **1번** (지금과 같음) |
+| 서버 2대 일관성 | **서버마다 사본이 다르다.** 수정이 한 서버에만 반영되고 다른 서버는 TTL이 끝날 때까지 옛 값 | 사본은 하나. 다만 Java에서 읽은 수량을 Lua에 넘기는 사이에 수정이 끼면 옛 수량으로 판정 | 사본 하나, **판정 순간에 Redis 안에서 최신 값을 읽는다** |
+| 무효화 방법 | 짧은 TTL, 또는 Redis Pub/Sub로 모든 서버에 "지워라" 방송 (메시지 유실 시 TTL까지 어긋남) | 수정할 때 `@CachePut`/`@CacheEvict` 한 곳만 | 수정할 때 Redis 해시를 같이 바꾼다 (write-through) |
+| 위험 | 총 수량을 줄였는데 다른 서버가 옛 수량으로 판정하면 **초과 발급** | 키가 지워진 순간 요청이 한꺼번에 DB로 (cache stampede) | Redis가 DB의 사본이 되므로 쓰기마다 맞춰야 한다. 판정 규칙 일부가 Lua로 간다 |
+
+**선택: Redis Lua 안에서 쿠폰 정보까지 검사**
+- 선착순 쿠폰에서 총 수량과 기간은 **정확성에 직결**된다. 로컬 캐시는 서버마다 다른 수량으로 판정할 수 있어서, 6단계의 synchronized처럼 서버를 늘리면 틀릴 수 있다.
+- 발급 판정은 이미 Redis Lua 1번으로 하고 있다. 쿠폰 정보를 그 옆에 두면 **네트워크 왕복을 늘리지 않고** DB 조회만 빠진다. Redis 캐시(`@Cacheable`)는 왕복이 하나 늘어난다.
+- 기간·수량·중복 확인과 발급이 한 스크립트로 **원자적**이다. 수정과 발급이 동시에 와도 둘 중 하나가 먼저 완전히 끝난다.
+- 쿠폰 정보는 쿠폰 하나에 해시 1개(필드 3개)라 메모리 부담이 없다.
+
+### 구현
+
+- Redis 키 `coupon:{id}:info` 해시: `total`, `start`, `end`(epoch 밀리초). 받은 유저(`coupon:{id}:users`), 수량(`coupon:{id}:count`)과 같은 곳에 둔다.
+- **발급** (`KafkaCouponIssueService`): Lua `TRY_ISSUE_WITH_INFO`가 `HMGET`으로 쿠폰 정보를 읽어 기간 → 중복 → 수량 순으로 확인하고 발급한다. DB를 읽지 않는다.
+  - 쿠폰 정보가 없으면(Redis 데이터 유실, 개발 서버 초기화) `INFO_NOT_LOADED`를 돌려준다. 그때만 DB에서 읽어 올리고 한 번 더 시도한다 (cache-aside).
+  - 없는 쿠폰이면 DB에서 확인하고 404. Redis에는 아무것도 남기지 않는다.
+- **생성** (`CouponService.create`): DB **커밋 뒤에** 쿠폰 정보를 올린다. 커밋 전에 올리면 롤백된(존재하지 않는) 쿠폰을 발급할 수 있다.
+- **수정** (`PUT /coupons/{id}`, `CouponService.update`):
+  1. DB 엔티티를 바꾼다 (아직 커밋 전).
+  2. Lua `UPDATE_INFO`로 "새 총 수량 ≥ 이미 발급된 수량"을 확인하고 해시를 바꾼다. 확인과 저장이 한 번에 일어나서, 사이에 발급이 끼어 수량을 넘기는 일이 없다. 실패하면 409 `COUPON_QUANTITY_BELOW_ISSUED`, DB도 롤백한다.
+  3. DB 커밋. **커밋이 실패하면** Redis만 새 값이 되므로 쿠폰 정보를 지운다. 다음 발급이 DB의 원래 값을 다시 읽는다.
+- **미스 때 올리기는 "없을 때만"** (`LOAD_INFO`, `EXISTS` 확인 후 `HSET`): 요청 A가 DB에서 옛 값을 읽은 뒤 수정이 새 값을 넣었다면, A가 늦게 옛 값으로 덮어쓰지 않는다.
+- 비교용 bench API의 `REDIS_LUA`(3단계 방식)는 그대로 DB에서 쿠폰을 읽는다. 6단계 비교 결과를 바꾸지 않기 위해서다.
+
+**남은 한계**
+- 없는 쿠폰 id로 계속 요청하면 매번 DB에 간다 (cache penetration). 필요하면 "없음"도 짧게 캐시한다.
+- 쿠폰 정보 키가 사라진 순간 몰린 요청은 각자 DB를 한 번씩 읽는다 (stampede). 키는 생성 때 미리 올리므로 Redis 장애 뒤에만 생긴다.
+- 기간 판정은 지금처럼 각 앱 서버의 시각을 쓴다. 서버 시계가 어긋나면 시작·종료 순간에 서버마다 판정이 다를 수 있다 (Redis `TIME`을 쓰면 시계 하나로 맞출 수 있다).
+
+### 적용 후 요청 1건 (`bench/results/cache/trace-after.txt`)
+
+```
+── SQL ──
+app1 | SET autocommit=0 / insert into coupon_issue ... / COMMIT / SET autocommit=1   ← Kafka 컨슈머 저장만 남음
+── Redis ──
+EVALSHA (Lua 1번) → 안에서 HMGET(쿠폰 정보), ZSCORE, GET, INCR, ZADD
+```
+
+발급 API의 SQL은 **0개**가 됐다. Redis 명령은 Lua 안의 `HMGET` 하나가 늘었지만 네트워크 왕복은 그대로 1번이다.
+
+### 측정 (Redis + Kafka, 서버 2대, 10,000명 → 쿠폰 100장, 3회)
+
+`bench/cache-bench.sh <before|after>`: 워밍업 15회 뒤 3회 측정. 회차마다 MySQL 문장 수와 Redis 명령 수 증가량을 함께 저장한다 (`bench/results/cache/`).
+
+| | 변경 전 | 변경 후 | 변화 |
+|---|---|---|---|
+| TPS (k6, 3회) | 2,995 / 3,132 / 2,795 | 4,358 / 4,875 / 3,221 | 중앙값 **2,995 → 4,358 (1.46배)** |
+| p95 응답 시간 (k6, 중앙값) | 2,185ms | 1,067ms | **−51%** |
+| p95 응답 시간 (서버 측정, 최대) | 0.32초 | 0.17초 | −47% |
+| 요청 1건당 앱 CPU 시간 | 0.706ms | 0.522ms | **−26%** |
+| 요청 1건당 MySQL 문장 (전체 / SELECT) | 6.04 / 1.00 | 0.04 / 0.00 | 0.04는 컨슈머 저장(100건 × 4문장 ÷ 10,000) |
+| 요청 1건당 DB 커넥션 사용 | 1.007 | 0.012 | |
+| DB 커넥션 대기 스레드 (최대) | 188 | **0** | |
+| 요청 1건당 Redis 명령 (Lua 안 포함) | 3.02 | 4.02 | 왕복은 1번 그대로 |
+
+- 요청 1건당 CPU 시간은 Prometheus에서 (CPU 사용 시간 증가량) ÷ (처리한 요청 수)로 구했다. 대시보드에 "요청 1건당 비용" 패널을 추가했다.
+- **CPU는 여전히 몰리는 순간 100%에 닿는다.** 병목이 사라진 것이 아니라 요청 1건이 덜 써서 같은 CPU로 더 많이 처리한다. 다음 한계도 여전히 CPU다.
+- TPS가 CPU 절감(1.35배)보다 조금 더 늘었다. 커넥션을 기다리며 쉬던 스레드가 사라져 스레드 전환이 줄어든 몫으로 보인다. 다만 회차 차이가 크다 (3,221 ~ 4,875).
+- 쿠폰 100장이라 저장은 100건뿐인데도 Kafka 저장 지연 p95는 약 2초로 그대로다. 컨슈머도 같은 CPU를 나눠 쓰기 때문이다.
+
+**변경 전** (커넥션 대기 최대 188, 요청 1건당 커넥션 1.0)
+
+![캐시 적용 전](docs/images/grafana-cache-before.png)
+
+**변경 후** (커넥션 대기 0, 요청 1건당 커넥션 약 0.01, 요청 1건당 CPU 시간 감소)
+
+![캐시 적용 후](docs/images/grafana-cache-after.png)
+
+### 테스트
+
+- `CouponInfoCacheTest` (Hibernate 통계로 실행된 SQL 수를 센다)
+  - 쿠폰을 만들면 커밋 뒤 Redis에 쿠폰 정보가 올라간다.
+  - **캐시 적중**: 발급 2번에 SQL 0개.
+  - **캐시 미스**: 첫 발급만 SQL 1개(쿠폰 조회) 후 Redis에 올리고, 다음 발급은 0개.
+  - 없는 쿠폰은 404 예외, Redis에 아무것도 남지 않는다.
+  - **쿠폰 수정 시 캐시 갱신**: 수량 1→2로 늘리면 매진이던 발급이 바로 성공하고, 기간을 내일로 미루면 바로 기간 밖 거절.
+  - 이미 발급된 수량보다 적게 줄이면 거절, DB와 Redis 모두 그대로.
+  - 수정 트랜잭션이 롤백되면 Redis 쿠폰 정보를 지우고, 다음 발급이 DB의 원래 값을 다시 읽는다.
+- `CouponApiTest`: `PUT /coupons/{id}` 200(바로 다음 발급부터 새 수량), 409 `COUPON_QUANTITY_BELOW_ISSUED`, 404.
+
+### 면접 답변: "캐시를 어떻게 적용했고, 서버가 여러 대일 때 일관성은 어떻게 지켰나요?"
+
+> 모니터링으로 병목이 CPU라는 것을 확인한 뒤, 발급 요청 1건이 하는 일을 MySQL general log로 따라가 봤습니다. 쿠폰 조회 SELECT 1개가 읽기 전용 트랜잭션 때문에 DB 왕복 6번이었습니다.
+> 로컬 캐시는 가장 빠르지만 서버마다 사본이 달라서, 총 수량을 줄였을 때 다른 서버가 옛 수량으로 발급하면 초과 발급이 됩니다. 그래서 쿠폰의 기간과 수량을 Redis 해시에 두고, 이미 쓰던 발급 Lua 스크립트 안에서 함께 확인하게 했습니다. 네트워크 왕복은 그대로 1번이고, 판정 순간에 모든 서버가 같은 최신 값을 봅니다.
+> 일관성은 쓰기 쪽에서 맞췄습니다. 생성은 커밋 뒤에 올리고, 수정은 Redis에서 "이미 발급된 수량 이상인지" 확인과 변경을 원자적으로 한 뒤 커밋하고, 커밋이 실패하면 Redis 사본을 지워 DB에서 다시 읽게 했습니다. 키가 없을 때는 DB에서 읽어 올리되, 이미 있으면 덮어쓰지 않아 옛 값이 새 값을 덮지 않게 했습니다.
+> 결과적으로 발급 API의 SQL이 0개가 되고, 요청 1건당 CPU 시간이 26% 줄어 서버 2대에서 TPS가 1.46배, p95가 절반이 됐습니다.

@@ -50,6 +50,14 @@ public class Coupon {
 		this.issueEndAt = issueEndAt;
 	}
 
+	/** 관리자 수정: 모든 값을 새 값으로 바꾼다. 이미 발급된 수량과의 비교는 발급 수량의 기준인 Redis에서 한다. */
+	public void update(String name, int totalQuantity, LocalDateTime issueStartAt, LocalDateTime issueEndAt) {
+		this.name = name;
+		this.totalQuantity = totalQuantity;
+		this.issueStartAt = issueStartAt;
+		this.issueEndAt = issueEndAt;
+	}
+
 	public boolean isInIssuePeriod(LocalDateTime now) {
 		return !now.isBefore(issueStartAt) && !now.isAfter(issueEndAt);
 	}

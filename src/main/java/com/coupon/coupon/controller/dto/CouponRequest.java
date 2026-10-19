@@ -10,7 +10,8 @@ import jakarta.validation.constraints.Positive;
 import jakarta.validation.constraints.Size;
 import java.time.LocalDateTime;
 
-public record CouponCreateRequest(
+/** 쿠폰 생성(POST)과 수정(PUT)에 함께 쓴다. 수정은 모든 값을 새 값으로 바꾼다. */
+public record CouponRequest(
 		@Schema(example = "선착순 100장 쿠폰")
 		@NotBlank(message = "쿠폰 이름은 비어 있을 수 없습니다.")
 		@Size(max = 100, message = "쿠폰 이름은 100자 이하여야 합니다.")
