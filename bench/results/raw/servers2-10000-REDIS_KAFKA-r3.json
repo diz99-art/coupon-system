@@ -1,0 +1,25 @@
+{
+  "method": "REDIS_KAFKA",
+  "users": 10000,
+  "requests": 10000,
+  "tps": 3026.091946426315,
+  "avgMs": 1306.685211256604,
+  "p95Ms": 2522.4375238999996,
+  "maxMs": 2835.137918,
+  "durationMs": 3304.592252,
+  "issued": 100,
+  "rejected": 9900,
+  "failed": 0,
+  "servers": {
+    "app1": 4999,
+    "app2": 5001
+  },
+  "label": "servers2",
+  "server": {
+    "couponId": 144,
+    "totalQuantity": 100,
+    "issueRows": 100,
+    "dbIssuedQuantity": 0,
+    "redisCount": 100
+  }
+}

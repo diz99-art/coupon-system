@@ -42,3 +42,7 @@ out/
 ### 로컬 비밀 값 ###
 .env
 *.log
+
+### 부하 테스트 워밍업 결과 (커밋하지 않음) ###
+bench/results/warmup/
+bench/results/last.json

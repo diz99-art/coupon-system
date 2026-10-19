@@ -1,0 +1,25 @@
+{
+  "method": "REDISSON_LOCK",
+  "users": 10000,
+  "requests": 10000,
+  "tps": 600.5284983358038,
+  "avgMs": 7017.998384426374,
+  "p95Ms": 14930.548357599999,
+  "maxMs": 15874.20491,
+  "durationMs": 16651.999077,
+  "issued": 100,
+  "rejected": 9900,
+  "failed": 0,
+  "servers": {
+    "app1": 4999,
+    "app2": 5001
+  },
+  "label": "servers2",
+  "server": {
+    "couponId": 86,
+    "totalQuantity": 100,
+    "issueRows": 100,
+    "dbIssuedQuantity": 100,
+    "redisCount": 0
+  }
+}

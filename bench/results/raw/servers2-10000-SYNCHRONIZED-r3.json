@@ -1,0 +1,25 @@
+{
+  "method": "SYNCHRONIZED",
+  "users": 10000,
+  "requests": 10000,
+  "tps": 3259.967802491163,
+  "avgMs": 1326.3841170678015,
+  "p95Ms": 2238.1314777499997,
+  "maxMs": 2354.112459,
+  "durationMs": 3067.514959,
+  "issued": 199,
+  "rejected": 9801,
+  "failed": 0,
+  "servers": {
+    "app2": 4998,
+    "app1": 5002
+  },
+  "label": "servers2",
+  "server": {
+    "couponId": 139,
+    "totalQuantity": 100,
+    "issueRows": 199,
+    "dbIssuedQuantity": 100,
+    "redisCount": 199
+  }
+}

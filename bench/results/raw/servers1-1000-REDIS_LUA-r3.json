@@ -1,0 +1,24 @@
+{
+  "method": "REDIS_LUA",
+  "users": 1000,
+  "requests": 1000,
+  "tps": 1837.5812469321006,
+  "avgMs": 235.46746404400002,
+  "p95Ms": 391.37162355,
+  "maxMs": 475.295667,
+  "durationMs": 544.193625,
+  "issued": 100,
+  "rejected": 900,
+  "failed": 0,
+  "servers": {
+    "app1": 1000
+  },
+  "label": "servers1",
+  "server": {
+    "couponId": 122,
+    "totalQuantity": 100,
+    "issueRows": 100,
+    "dbIssuedQuantity": 0,
+    "redisCount": 100
+  }
+}

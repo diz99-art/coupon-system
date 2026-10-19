@@ -44,7 +44,9 @@ import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 		"spring.kafka.bootstrap-servers=${spring.embedded.kafka.brokers}",
 		"coupon.kafka.listener-auto-startup=true",
 		"coupon.kafka.retry.interval-ms=300",
-		"coupon.kafka.retry.max-retries=3"})
+		"coupon.kafka.retry.max-retries=3",
+		// DLT로 간 발급을 곧바로 대사해 보려고 유예 시간을 없앤다.
+		"coupon.reconcile.grace-ms=0"})
 // 토픽은 KafkaConfig의 NewTopic 빈이 만든다 (파티션 수를 운영과 같게).
 @EmbeddedKafka
 @DirtiesContext

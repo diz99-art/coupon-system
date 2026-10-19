@@ -1,0 +1,25 @@
+{
+  "method": "PESSIMISTIC_LOCK",
+  "users": 1000,
+  "requests": 1000,
+  "tps": 2924.097017714329,
+  "avgMs": 183.98939040900007,
+  "p95Ms": 275.17907775,
+  "maxMs": 286.700334,
+  "durationMs": 341.985917,
+  "issued": 100,
+  "rejected": 900,
+  "failed": 0,
+  "servers": {
+    "app1": 500,
+    "app2": 500
+  },
+  "label": "servers2",
+  "server": {
+    "couponId": 126,
+    "totalQuantity": 100,
+    "issueRows": 100,
+    "dbIssuedQuantity": 100,
+    "redisCount": 0
+  }
+}

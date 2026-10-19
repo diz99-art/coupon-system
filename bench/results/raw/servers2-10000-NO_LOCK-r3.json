@@ -1,0 +1,25 @@
+{
+  "method": "NO_LOCK",
+  "users": 10000,
+  "requests": 10000,
+  "tps": 1992.0687984019717,
+  "avgMs": 3153.82769222521,
+  "p95Ms": 4015.2859186,
+  "maxMs": 4299.12353,
+  "durationMs": 5019.906947,
+  "issued": 1995,
+  "rejected": 8005,
+  "failed": 0,
+  "servers": {
+    "app1": 5000,
+    "app2": 5000
+  },
+  "label": "servers2",
+  "server": {
+    "couponId": 138,
+    "totalQuantity": 100,
+    "issueRows": 1995,
+    "dbIssuedQuantity": 100,
+    "redisCount": 0
+  }
+}

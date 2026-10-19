@@ -24,8 +24,9 @@ class CouponReconciliationTest extends IntegrationTest {
 	@Test
 	@DisplayName("Redis에만 있는 발급은 원래 발급 시각으로 DB에 저장하고, DB에만 있는 발급은 Redis에 다시 넣는다")
 	void reconcileBothDirections() {
-		LocalDateTime now = LocalDateTime.now().truncatedTo(ChronoUnit.MILLIS);
-		Coupon coupon = couponRepository.save(new Coupon("대사 쿠폰", 100, now.minusHours(1), now.plusHours(1)));
+		// 대사 유예 시간(30초)보다 오래된 발급으로 만든다.
+		LocalDateTime now = LocalDateTime.now().truncatedTo(ChronoUnit.MILLIS).minusHours(1);
+		Coupon coupon = couponRepository.save(new Coupon("대사 쿠폰", 100, now.minusHours(1), now.plusHours(2)));
 		Long couponId = coupon.getId();
 
 		// 유저 1~5: 1분 간격으로 Redis 판정 통과. 그중 1~3만 DB에 저장됨 (4, 5는 메시지가 DLT로 갔다고 가정)
@@ -53,6 +54,20 @@ class CouponReconciliationTest extends IntegrationTest {
 
 		// 두 번 돌려도 더 바뀌는 것이 없다.
 		assertThat(couponReconciliationService.reconcile()).isEqualTo(new CouponReconciliationService.Result(0, 0));
+	}
+
+	@Test
+	@DisplayName("방금 Redis에 들어온 발급은 아직 저장 중일 수 있으므로 DB에 채우지 않는다")
+	void skipRecentIssues() {
+		LocalDateTime now = LocalDateTime.now().truncatedTo(ChronoUnit.MILLIS);
+		Coupon coupon = couponRepository.save(new Coupon("대사 쿠폰", 100, now.minusHours(1), now.plusHours(1)));
+		couponIssueRedisRepository.tryIssue(coupon.getId(), 1L, coupon.getTotalQuantity(), now.minusMinutes(5));
+		couponIssueRedisRepository.tryIssue(coupon.getId(), 2L, coupon.getTotalQuantity(), now);
+
+		CouponReconciliationService.Result result = couponReconciliationService.reconcile();
+
+		assertThat(result.savedToDb()).isEqualTo(1);
+		assertThat(dbIssues(coupon.getId())).containsOnlyKeys(1L);
 	}
 
 	/** 유저마다 다른 발급 시각: 기준 시각 + 유저 id분 */

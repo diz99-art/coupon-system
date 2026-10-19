@@ -24,9 +24,18 @@
 - MySQL·Redis·Kafka 실행: `docker compose up -d` (종료: `docker compose down`)
 - 서버 실행: `./gradlew bootRun` (기본 local 프로필: 켤 때마다 DB 테이블과 Redis 쿠폰 키 초기화)
 - API 문서: 서버 실행 후 http://localhost:8080/swagger-ui.html
+- 서버 2대 + nginx: `docker compose --profile cluster up -d --build` (8090 → 2대, 8091 → 1대, bench 프로필)
+- 부하 테스트: `bench/run.sh <서버 수 1|2> <사용자 수> [방식...]`, 전체 측정은 `bench/all.sh` (k6는 컨테이너로 실행)
 - 테스트: `./gradlew test` (docker compose가 떠 있어야 한다)
 
+## 프로필
+
+- local(기본): 개발 서버. 켤 때마다 DB 테이블, Redis 쿠폰 키, Kafka 발급 토픽의 남은 메시지를 비운다.
+- test: 테스트. docker: 컨테이너 실행(ddl-auto update, 토픽 coupon-issue-cluster). bench: 비교 API(/bench) 켜기.
+
 ## 테스트 주의
+
+- 테스트, 부하 테스트(bench), 개발 서버는 같은 MySQL DB와 Redis를 쓴다. 동시에 돌리지 않는다 (테스트가 데이터를 지운다).
 
 - `src/test/resources/config/application.yml`이 test 프로필, 테스트 전용 토픽(coupon-issue-test)을 쓰고 Kafka 리스너와 대사 스케줄러를 끈다. 필요한 테스트만 켠다.
 - DB·Redis를 쓰는 테스트는 `IntegrationTest`를 상속한다 (테스트 전후로 DB와 Redis 쿠폰 키 정리).

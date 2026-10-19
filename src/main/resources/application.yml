@@ -54,3 +54,5 @@ coupon:
   reconcile:
     # Redis와 DB를 비교해 보정하는 간격
     interval-ms: 60000
+    # 발급된 지 이 시간이 지나지 않은 Redis 기록은 아직 저장 중일 수 있어 보정하지 않는다.
+    grace-ms: 30000

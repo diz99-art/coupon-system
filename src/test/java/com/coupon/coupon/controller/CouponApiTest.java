@@ -254,6 +254,16 @@ class CouponApiTest extends IntegrationTest {
 		}
 
 		@Test
+		@DisplayName("비교용 API는 bench 프로필이 아니면 없다")
+		void benchApiHidden() throws Exception {
+			mockMvc.perform(post("/bench/coupons/{id}/issue", 1).param("method", "NO_LOCK")
+							.contentType(MediaType.APPLICATION_JSON).content("{\"userId\":1}"))
+					.andExpect(status().isNotFound());
+			mockMvc.perform(get("/v3/api-docs"))
+					.andExpect(jsonPath("$.paths['/bench/coupons/{couponId}/issue']").doesNotExist());
+		}
+
+		@Test
 		@DisplayName("Swagger 문서와 화면이 열린다")
 		void swagger() throws Exception {
 			mockMvc.perform(get("/v3/api-docs"))

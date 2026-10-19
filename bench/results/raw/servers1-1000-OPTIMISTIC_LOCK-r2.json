@@ -1,0 +1,24 @@
+{
+  "method": "OPTIMISTIC_LOCK",
+  "users": 1000,
+  "requests": 1000,
+  "tps": 750.8740400966122,
+  "avgMs": 981.8110579200003,
+  "p95Ms": 1193.1467569,
+  "maxMs": 1241.425167,
+  "durationMs": 1331.781293,
+  "issued": 100,
+  "rejected": 900,
+  "failed": 0,
+  "servers": {
+    "app1": 1000
+  },
+  "label": "servers1",
+  "server": {
+    "couponId": 92,
+    "totalQuantity": 100,
+    "issueRows": 100,
+    "dbIssuedQuantity": 100,
+    "redisCount": 0
+  }
+}
