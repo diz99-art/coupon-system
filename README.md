@@ -86,13 +86,16 @@ bench/run.sh 2 10000 REDIS_KAFKA                 # k6로 10,000명 동시 요청
 
 ## API
 
-| 메서드 | 주소 | 설명 | 성공 |
-|---|---|---|---|
-| POST | `/coupons` | 쿠폰 생성 | 201 + Location |
-| GET | `/coupons/{couponId}` | 쿠폰 조회 (남은 수량은 Redis 기준) | 200 |
-| PUT | `/coupons/{couponId}` | 쿠폰 수정 (발급 판정용 Redis 쿠폰 정보도 함께 바뀜) | 200 |
-| POST | `/coupons/{couponId}/issue` | 발급 (Redis 판정 + Kafka 비동기 저장) | 202 |
-| GET | `/users/{userId}/coupons` | 내 발급 내역 (최근 순, DB 기준) | 200 |
+| 메서드 | 주소 | 설명 | 권한 | 성공 |
+|---|---|---|---|---|
+| POST | `/coupons` | 쿠폰 생성 | ADMIN | 201 + Location |
+| GET | `/coupons/{couponId}` | 쿠폰 조회 (남은 수량은 Redis 기준) | 공개 | 200 |
+| PUT | `/coupons/{couponId}` | 쿠폰 수정 (발급 판정용 Redis 쿠폰 정보도 함께 바뀜) | ADMIN | 200 |
+| POST | `/coupons/{couponId}/issue` | 발급 (Redis 판정 + Kafka 비동기 저장). 발급받는 사람 = 토큰의 사용자, 본문 없음 | 로그인 | 202 |
+| GET | `/users/me/coupons` | 내 발급 내역 (최근 순, DB 기준) | 로그인 | 200 |
+| GET | `/users/{userId}/coupons` | 다른 사용자의 발급 내역 | ADMIN | 200 |
+
+토큰은 인증 서버([platform-services](https://github.com/diz99-art/platform-services)의 auth)에서 받는다: `Authorization: Bearer <액세스 토큰>`. 토큰 없음·만료·위조는 401 `UNAUTHORIZED`, 권한 부족은 403 `FORBIDDEN`.
 
 에러는 모두 같은 형식이다. `errors`는 요청 값 검증에 실패한 필드 목록이고, 그 밖의 에러에서는 빈 배열이다.
 
@@ -113,6 +116,7 @@ bench/run.sh 2 10000 REDIS_KAFKA                 # k6로 10,000명 동시 요청
 - [7단계: 운영 준비 (스케줄 작업 중복 실행 막기, 모니터링)](#7단계-운영-준비-스케줄-작업-중복-실행-막기-모니터링)
 - [8단계: 캐시로 CPU 병목 개선](#8단계-캐시로-cpu-병목-개선)
 - [9단계: 포트폴리오 마무리](#9단계-포트폴리오-마무리)
+- [10단계: 인증 서버 연동 (JWT 리소스 서버)](#10단계-인증-서버-연동-jwt-리소스-서버)
 - [트러블슈팅](#트러블슈팅)
 - [면접 예상 질문과 답변](#면접-예상-질문과-답변)
 
@@ -873,6 +877,42 @@ EVALSHA (Lua 1번) → 안에서 HMGET(쿠폰 정보), ZSCORE, GET, INCR, ZADD
 [platform-infra](https://github.com/diz99-art/platform-infra)의 k3s 클러스터에서 prod 프로필로 2대가 돈다 (MySQL·Redis·Kafka도 클러스터 안).
 설정은 ConfigMap, 비밀번호는 Ansible Vault → Secret. 배포는 **GitOps**: main에 push하면 CI의 `deploy` job이 platform-infra의 `k8s/apps/coupon/kustomization.yaml` 이미지 태그를 이 커밋 해시로 바꾸고, ArgoCD가 감지해 배포한다 (push부터 약 5분, 사람 손 없음).
 자세한 내용은 platform-infra의 `docs/coupon.md`(배포 설계), `docs/gitops.md`(ArgoCD).
+
+## 10단계: 인증 서버 연동 (JWT 리소스 서버)
+
+인증 서버([platform-services](https://github.com/diz99-art/platform-services)의 auth)가 발급한 JWT로 사용자를 확인한다. 쿠폰 서버는 k3s에서 돈다([platform-infra](https://github.com/diz99-art/platform-infra)).
+
+### 한 일
+
+- Spring Security **OAuth2 리소스 서버**: 인증 서버의 공개키 목록(JWKS, `/auth/.well-known/jwks.json`)을 받아 RS256 서명을 검증한다. 개인키는 없다
+  - 서명 외에 발급자(`iss=platform-auth`), 대상(`aud=platform`), 만료(`exp`)도 확인. RS256만 받는다(`alg: none` 위조 거부)
+  - 공개키는 캐시하고, 모르는 키 id(kid)가 오면 다시 받는다 → 인증 서버가 키를 바꿔도 따라간다
+  - 토큰의 `roles`(["USER"])를 권한 `ROLE_USER`로 바꿔 `hasRole("ADMIN")` 검사에 쓴다 (`config/SecurityConfig`)
+- 권한: 조회는 공개, 생성·수정은 ADMIN, 발급·내 내역은 로그인 사용자, 남의 내역은 ADMIN. 없는 주소도 토큰이 없으면 401(어떤 주소가 있는지 알려주지 않는다)
+- 401·403도 공통 에러 응답 모양, Swagger에 bearer 인증(Authorize 버튼)
+
+### 발급 API에서 userId를 토큰에서 가져오는 이유
+
+- 전에는 `POST /coupons/{id}/issue` 본문에 `{"userId": 1}`을 받았다. 이걸 믿으면 **로그인만 하면 누구나 남의 id로 쿠폰을 받을 수 있다** (선착순 쿠폰을 다른 사람 몫까지 가로채기, 남의 계정에 원치 않는 발급)
+- 토큰의 `sub`는 인증 서버가 개인키로 서명한 값이라 클라이언트가 바꿀 수 없다(바꾸면 서명이 깨져 401) → 발급받는 사람 = 토큰의 사용자
+- 그래서 본문을 없앴다. 본문에 userId를 넣어도 무시한다 (테스트 `userIdComesFromToken`, 클러스터에서도 확인)
+- 같은 이유로 "내 발급 내역"은 `/users/me/coupons`가 됐다
+- 부하 비교 API(`/bench/...`)는 그대로 userId를 받는다: `bench` 프로필에만 있고 운영(prod)에는 없는 측정 도구라서다
+
+### 테스트와 스크립트
+
+- 테스트: `spring-security-test`의 `jwt()`로 가짜 토큰을 붙인다 (서명 검증은 건너뛰고 sub·권한만 정한다). 401(토큰 없음), 403(USER의 생성·수정·남의 내역), 본문 userId 무시 테스트 추가 → 전체 67개 통과(CI)
+- `bench/token.sh <이메일> <비밀번호>`: 인증 서버에서 액세스 토큰 받기 (기본 k3s 클러스터)
+- `bench/trace-request.sh`: `ADMIN_TOKEN`으로 쿠폰 생성, `USER_TOKEN`으로 발급
+- `bench/issue-auth.js` (k6): setup에서 USERS명을 가입·로그인시켜 토큰을 받고, 각자 자기 토큰으로 실제 발급 API를 부른다
+- 로컬 docker compose의 앱은 k3s 인증 서버의 JWKS를 쓴다 (`COUPON_AUTH_JWK_SET_URI`)
+
+### 검증 (k3s)
+
+- 회원가입 → 로그인 → 토큰으로 발급 202 (본문에 남의 userId를 넣어도 토큰의 사용자로)
+- 토큰 없음·만료·변조·다른 키·다른 발급자·다른 대상·`alg: none` → 401, USER의 쿠폰 생성 → 403
+- 인증·쿠폰 서버를 동시에 롤링 업데이트하는 동안 발급 39,480건·로그인 4,365건 실패 0
+- 메모리: Spring Security·OAuth2를 넣자 힙 밖(Metaspace·코드 캐시)이 186 → 233MiB로 늘어 limit 640 → 704Mi, 힙은 `-Xmx256m`으로 고정
 
 ## 트러블슈팅
 

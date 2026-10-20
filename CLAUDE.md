@@ -28,6 +28,13 @@
 - Java 21, Spring Boot 4, Gradle(Groovy)
 - Spring Web, Spring Data JPA, MySQL 8.4, Spring Data Redis(Redis 7), Redisson, Spring Kafka(Kafka 4.3, KRaft), Lombok
 
+## 인증 (10단계)
+
+- 인증 서버(platform-services의 auth)가 발급한 JWT를 공개키(JWKS)로 검증하는 리소스 서버다 (`config/SecurityConfig`). 개인키는 없다
+- 권한: 조회 공개, 생성·수정 ADMIN, 발급·`/users/me/coupons` 로그인, `/users/{id}/coupons` ADMIN, 그 밖은 인증 필요
+- 발급받는 사람은 토큰의 `sub`. 요청 본문의 userId를 믿지 않는다 (bench 프로필 비교 API만 예외)
+- 테스트는 `spring-security-test`의 `jwt()`로 토큰을 붙인다. 토큰: `bench/token.sh <이메일> <비밀번호>`
+
 ## 명령어
 
 - 처음 한 번: `cp .env.example .env` (비밀번호 등 환경변수. `.env`는 git에 올리지 않는다)
