@@ -1,5 +1,6 @@
 # push와 PR마다 전체 테스트를 돌린다.
 # 테스트는 실제 MySQL, Redis, Kafka를 쓰므로 로컬과 같은 docker-compose.yml로 띄운다.
+# main에 push되고 테스트가 통과하면 ARM64 이미지를 만들어 GHCR(ghcr.io)에 올린다 (k3s 클러스터 노드가 ARM64).
 name: CI
 
 on:
@@ -44,3 +45,49 @@ jobs:
       - name: 실패하면 컨테이너 로그 보기
         if: failure()
         run: docker compose logs --tail 200
+
+  # 테스트를 통과한 main만 이미지로 만든다. PR이나 다른 브랜치는 테스트만 한다.
+  image:
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    # ARM64 러너에서 바로 빌드한다 (public 저장소 무료). x86 러너에서 QEMU로 흉내 내면 몇 배 느리다.
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write   # GHCR에 올리기
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/setup-buildx-action@v4
+
+      # GITHUB_TOKEN은 이 실행 동안만 유효한 임시 토큰이다. 따로 비밀번호를 저장할 필요가 없다.
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # 태그는 커밋 해시 하나만 붙인다 (latest를 쓰지 않는 이유는 platform-infra의 docs/coupon.md).
+      # 이미지 라벨(org.opencontainers.image.source 등)로 어느 저장소·커밋에서 만들었는지 남긴다.
+      - id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: type=raw,value=${{ github.sha }}
+
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # 빌드 층을 GitHub Actions 캐시에 저장 → 의존성이 그대로면 Gradle 다운로드 층을 다시 쓰지 않는다
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: 올린 이미지
+        run: |
+          echo "### 이미지" >> "$GITHUB_STEP_SUMMARY"
+          echo '`ghcr.io/${{ github.repository }}:${{ github.sha }}`' >> "$GITHUB_STEP_SUMMARY"
