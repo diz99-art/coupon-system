@@ -95,6 +95,9 @@ coupon:
     grace-ms: 30000
 
 logging:
+  pattern:
+    # 로그 줄마다 요청 ID (RequestIdFilter가 MDC에 넣는다). Traefik 접근 로그와 같은 값
+    correlation: "[%X{requestId:-}] "
   level:
     # 락을 못 잡아 건너뛴 기록("Not executing ... It's locked")을 남긴다.
     net.javacrumbs.shedlock: debug
