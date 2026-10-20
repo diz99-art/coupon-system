@@ -1,6 +1,7 @@
 # push와 PR마다 전체 테스트를 돌린다.
 # 테스트는 실제 MySQL, Redis, Kafka를 쓰므로 로컬과 같은 docker-compose.yml로 띄운다.
 # main에 push되고 테스트가 통과하면 ARM64 이미지를 만들어 GHCR(ghcr.io)에 올린다 (k3s 클러스터 노드가 ARM64).
+# 이어서 platform-infra의 이미지 태그를 이 커밋 해시로 바꿔 push한다 → ArgoCD가 감지해 클러스터에 배포한다 (GitOps).
 name: CI
 
 on:
@@ -91,3 +92,53 @@ jobs:
         run: |
           echo "### 이미지" >> "$GITHUB_STEP_SUMMARY"
           echo '`ghcr.io/${{ github.repository }}:${{ github.sha }}`' >> "$GITHUB_STEP_SUMMARY"
+
+  # platform-infra의 k8s/apps/coupon/kustomization.yaml에서 이미지 태그(newTag) 한 줄만 바꿔 push한다.
+  # 클러스터에 직접 배포하지 않는다: Git이 기준이고, ArgoCD가 Git을 보고 배포한다.
+  deploy:
+    needs: image
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # 커밋이 연달아 오면 차례로 처리한다 (동시에 push하면 한쪽이 거절된다)
+    concurrency:
+      group: platform-infra-deploy
+      cancel-in-progress: false
+    permissions:
+      contents: read
+    steps:
+      # deploy key: platform-infra 저장소 하나에만 쓰기 권한이 있는 SSH 키. 개인키는 이 저장소의 Actions Secret에 있다
+      - uses: actions/checkout@v7
+        with:
+          repository: diz99-art/platform-infra
+          ssh-key: ${{ secrets.PLATFORM_INFRA_DEPLOY_KEY }}
+          path: platform-infra
+
+      - name: 이미지 태그를 이 커밋 해시로
+        working-directory: platform-infra
+        env:
+          SHA: ${{ github.sha }}
+          FILE: k8s/apps/coupon/kustomization.yaml
+        run: |
+          sed -i -E "s/^(    newTag: ).*/\1${SHA}/" "$FILE"
+          grep -q "newTag: ${SHA}" "$FILE" || { echo "태그를 바꾸지 못했습니다"; exit 1; }
+          git diff --stat
+
+      - name: platform-infra에 push
+        working-directory: platform-infra
+        env:
+          SHA: ${{ github.sha }}
+          SUBJECT: ${{ github.event.head_commit.message }}
+        run: |
+          if git diff --quiet; then echo "이미 같은 태그입니다. 할 일 없음"; exit 0; fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "coupon: 이미지 ${SHA::7} 배포" -m "coupon-system ${SHA}" -m "${SUBJECT%%$'\n'*}"
+          # 그 사이 다른 커밋이 들어왔으면 위에 다시 얹어서 push (최대 3번)
+          for i in 1 2 3; do git push && exit 0; git pull --rebase; done
+          exit 1
+
+      - name: 배포 요청 기록
+        run: |
+          echo "### 배포 요청" >> "$GITHUB_STEP_SUMMARY"
+          echo "platform-infra 이미지 태그 → \`${{ github.sha }}\` (ArgoCD가 1분 안에 감지)" >> "$GITHUB_STEP_SUMMARY"
