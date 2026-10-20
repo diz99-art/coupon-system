@@ -6,6 +6,10 @@ name: CI
 
 on:
   push:
+    # 문서만 바뀐 push는 건너뛴다 (테스트·이미지·배포가 돌면 파드가 괜히 다시 뜬다)
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
   pull_request:
 
 permissions:

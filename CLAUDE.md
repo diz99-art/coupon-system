@@ -62,6 +62,8 @@
 ## CI
 
 - GitHub Actions(`.github/workflows/ci.yml`)가 push·PR마다 `docker compose up -d --wait mysql redis kafka` 후 `./gradlew test`를 돌린다.
+- main push는 이어서 `image`(ARM64 이미지 → `ghcr.io/diz99-art/coupon-system:<커밋 해시>`)와 `deploy`(platform-infra의 `k8s/apps/coupon/kustomization.yaml` newTag 변경)가 돈다. ArgoCD가 감지해 k3s 클러스터에 배포한다.
+  → **main에 push하면 약 5분 뒤 클러스터에 배포된다.** 깨진 코드를 main에 바로 올리지 않는다 (테스트가 실패하면 배포되지 않는다). 롤백은 platform-infra에서 봇 커밋을 `git revert`.
 
 ## 테스트 주의
 
