@@ -323,12 +323,15 @@ class CouponApiTest extends IntegrationTest {
 	class Others {
 
 		@Test
-		@DisplayName("없는 주소도 같은 에러 형식으로 404")
+		@DisplayName("없는 주소: 로그인하면 같은 에러 형식으로 404, 토큰이 없으면 401 (어떤 주소가 있는지 알려주지 않는다)")
 		void unknownPath() throws Exception {
-			mockMvc.perform(get("/no-such-path"))
+			mockMvc.perform(get("/no-such-path").with(user(1L)))
 					.andExpect(status().isNotFound())
 					.andExpect(jsonPath("$.code").exists())
 					.andExpect(jsonPath("$.message").exists());
+			mockMvc.perform(get("/no-such-path"))
+					.andExpect(status().isUnauthorized())
+					.andExpect(jsonPath("$.code").value("UNAUTHORIZED"));
 		}
 
 		@Test
