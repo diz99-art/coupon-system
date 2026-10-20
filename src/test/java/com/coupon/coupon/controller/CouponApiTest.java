@@ -25,7 +25,11 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import java.util.List;
 import org.springframework.http.MediaType;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.test.web.servlet.request.RequestPostProcessor;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
@@ -49,6 +53,19 @@ class CouponApiTest extends IntegrationTest {
 	@Nested
 	@DisplayName("POST /coupons 쿠폰 생성")
 	class Create {
+
+		@Test
+		@DisplayName("ADMIN이 아니면 403, 토큰이 없으면 401 (만들어지지 않는다)")
+		void adminOnly() throws Exception {
+			String body = "{\"name\":\"쿠폰\",\"totalQuantity\":10,\"issueStartAt\":\"2026-10-20T10:00:00\",\"issueEndAt\":\"2026-10-21T10:00:00\"}";
+			mockMvc.perform(post("/coupons").with(user(1L)).contentType(MediaType.APPLICATION_JSON).content(body))
+					.andExpect(status().isForbidden()).andExpect(jsonPath("$.code").value("FORBIDDEN"));
+			mockMvc.perform(post("/coupons").contentType(MediaType.APPLICATION_JSON).content(body))
+					.andExpect(status().isUnauthorized());
+			mockMvc.perform(put("/coupons/{id}", 1).with(user(1L)).contentType(MediaType.APPLICATION_JSON).content(body))
+					.andExpect(status().isForbidden());
+			assertThat(couponRepository.count()).isZero();
+		}
 
 		@Test
 		@DisplayName("201과 Location 헤더, 생성된 쿠폰을 돌려준다")
@@ -88,7 +105,7 @@ class CouponApiTest extends IntegrationTest {
 		@Test
 		@DisplayName("이름이 비었고 시각이 없으면 틀린 필드를 모두 알려준다")
 		void reportsAllInvalidFields() throws Exception {
-			mockMvc.perform(post("/coupons").contentType(MediaType.APPLICATION_JSON)
+			mockMvc.perform(post("/coupons").with(admin()).contentType(MediaType.APPLICATION_JSON)
 							.content("{\"name\":\" \",\"totalQuantity\":10}"))
 					.andExpect(status().isBadRequest())
 					.andExpect(jsonPath("$.errors.length()").value(3))
@@ -100,7 +117,7 @@ class CouponApiTest extends IntegrationTest {
 		@Test
 		@DisplayName("날짜 형식이 틀리면 400")
 		void unreadableBody() throws Exception {
-			mockMvc.perform(post("/coupons").contentType(MediaType.APPLICATION_JSON)
+			mockMvc.perform(post("/coupons").with(admin()).contentType(MediaType.APPLICATION_JSON)
 							.content("{\"name\":\"쿠폰\",\"totalQuantity\":10,\"issueStartAt\":\"내일\",\"issueEndAt\":\"모레\"}"))
 					.andExpect(status().isBadRequest())
 					.andExpect(jsonPath("$.code").value("INVALID_REQUEST"))
@@ -226,12 +243,25 @@ class CouponApiTest extends IntegrationTest {
 		}
 
 		@Test
-		@DisplayName("userId가 없으면 400")
-		void userIdRequired() throws Exception {
+		@DisplayName("토큰이 없으면 401 UNAUTHORIZED (발급되지 않는다)")
+		void tokenRequired() throws Exception {
 			Coupon coupon = openCoupon(10);
-			mockMvc.perform(post("/coupons/{id}/issue", coupon.getId()).contentType(MediaType.APPLICATION_JSON).content("{}"))
-					.andExpect(status().isBadRequest())
-					.andExpect(jsonPath("$.errors[0].field").value("userId"));
+			mockMvc.perform(post("/coupons/{id}/issue", coupon.getId()))
+					.andExpect(status().isUnauthorized())
+					.andExpect(header().string("WWW-Authenticate", "Bearer"))
+					.andExpect(jsonPath("$.code").value("UNAUTHORIZED"));
+			assertThat(couponIssueRedisRepository.issuedCount(coupon.getId())).isZero();
+		}
+
+		@Test
+		@DisplayName("발급받는 사람은 토큰의 사용자다. 본문에 다른 userId를 넣어도 무시한다")
+		void userIdComesFromToken() throws Exception {
+			Coupon coupon = openCoupon(10);
+			mockMvc.perform(post("/coupons/{id}/issue", coupon.getId()).with(user(7L))
+							.contentType(MediaType.APPLICATION_JSON).content("{\"userId\":999}"))
+					.andExpect(status().isAccepted())
+					.andExpect(jsonPath("$.userId").value(7));
+			assertThat(couponIssueRedisRepository.issuedUserIds(coupon.getId())).containsExactly(7L);
 		}
 
 		@Test
@@ -248,7 +278,7 @@ class CouponApiTest extends IntegrationTest {
 	}
 
 	@Nested
-	@DisplayName("GET /users/{userId}/coupons 내 발급 내역")
+	@DisplayName("GET /users/me/coupons 내 발급 내역, GET /users/{userId}/coupons 관리자")
 	class UserCoupons {
 
 		@Test
@@ -261,7 +291,7 @@ class CouponApiTest extends IntegrationTest {
 			couponIssueRepository.save(new CouponIssue(second.getId(), 1L, now.minusMinutes(1)));
 			couponIssueRepository.save(new CouponIssue(second.getId(), 2L, now));
 
-			mockMvc.perform(get("/users/{userId}/coupons", 1))
+			mockMvc.perform(get("/users/me/coupons").with(user(1L)))
 					.andExpect(status().isOk())
 					.andExpect(jsonPath("$.length()").value(2))
 					.andExpect(jsonPath("$[0].couponName").value("둘째 쿠폰"))
@@ -272,9 +302,19 @@ class CouponApiTest extends IntegrationTest {
 		@Test
 		@DisplayName("받은 쿠폰이 없으면 빈 배열")
 		void empty() throws Exception {
-			mockMvc.perform(get("/users/{userId}/coupons", 42))
+			mockMvc.perform(get("/users/me/coupons").with(user(42L)))
 					.andExpect(status().isOk())
 					.andExpect(jsonPath("$.length()").value(0));
+		}
+
+		@Test
+		@DisplayName("다른 사용자의 내역은 ADMIN만 본다 (USER는 403)")
+		void otherUsersCouponsAdminOnly() throws Exception {
+			mockMvc.perform(get("/users/{userId}/coupons", 1).with(user(2L)))
+					.andExpect(status().isForbidden())
+					.andExpect(jsonPath("$.code").value("FORBIDDEN"));
+			mockMvc.perform(get("/users/{userId}/coupons", 1).with(admin()))
+					.andExpect(status().isOk());
 		}
 	}
 
@@ -308,6 +348,7 @@ class CouponApiTest extends IntegrationTest {
 					.andExpect(status().isOk())
 					.andExpect(jsonPath("$.paths['/coupons']").exists())
 					.andExpect(jsonPath("$.paths['/coupons/{couponId}/issue']").exists())
+					.andExpect(jsonPath("$.paths['/users/me/coupons']").exists())
 					.andExpect(jsonPath("$.paths['/users/{userId}/coupons']").exists());
 			mockMvc.perform(get("/swagger-ui/index.html"))
 					.andExpect(status().isOk());
@@ -322,20 +363,30 @@ class CouponApiTest extends IntegrationTest {
 	private ResultActions createCoupon(String name, int quantity, LocalDateTime start, LocalDateTime end) throws Exception {
 		String body = "{\"name\":\"%s\",\"totalQuantity\":%d,\"issueStartAt\":\"%s\",\"issueEndAt\":\"%s\"}"
 				.formatted(name, quantity, start.format(FORMAT), end.format(FORMAT));
-		return mockMvc.perform(post("/coupons").contentType(MediaType.APPLICATION_JSON).content(body));
+		return mockMvc.perform(post("/coupons").with(admin()).contentType(MediaType.APPLICATION_JSON).content(body));
 	}
 
 	private ResultActions updateCoupon(Long couponId, String name, int quantity, LocalDateTime start, LocalDateTime end)
 			throws Exception {
 		String body = "{\"name\":\"%s\",\"totalQuantity\":%d,\"issueStartAt\":\"%s\",\"issueEndAt\":\"%s\"}"
 				.formatted(name, quantity, start.format(FORMAT), end.format(FORMAT));
-		return mockMvc.perform(put("/coupons/{id}", couponId).contentType(MediaType.APPLICATION_JSON).content(body));
+		return mockMvc.perform(put("/coupons/{id}", couponId).with(admin()).contentType(MediaType.APPLICATION_JSON).content(body));
 	}
 
+	/** 그 사용자로 로그인한 토큰을 붙여 발급 요청 (본문 없음) */
 	private ResultActions issue(Long couponId, Long userId) throws Exception {
-		return mockMvc.perform(post("/coupons/{id}/issue", couponId)
-				.contentType(MediaType.APPLICATION_JSON)
-				.content("{\"userId\":%d}".formatted(userId)));
+		return mockMvc.perform(post("/coupons/{id}/issue", couponId).with(user(userId)));
+	}
+
+	/** 인증 서버가 발급한 것과 같은 모양의 가짜 JWT: sub = 사용자 id, 권한 ROLE_USER (서명 검증은 건너뛴다) */
+	private static RequestPostProcessor user(Long userId) {
+		return jwt().jwt(j -> j.subject(String.valueOf(userId)).claim("roles", List.of("USER")))
+				.authorities(new SimpleGrantedAuthority("ROLE_USER"));
+	}
+
+	private static RequestPostProcessor admin() {
+		return jwt().jwt(j -> j.subject("100").claim("roles", List.of("ADMIN")))
+				.authorities(new SimpleGrantedAuthority("ROLE_ADMIN"));
 	}
 
 	private ResultActions expectError(ResultActions result, int status, String code) throws Exception {

@@ -73,6 +73,8 @@ services:
       DB_PASSWORD: ${DB_PASSWORD}
       REDIS_HOST: redis
       KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      # 토큰 검증용 공개키: 로컬에는 인증 서버가 없어 k3s 클러스터의 인증 서버(Ingress)를 쓴다
+      COUPON_AUTH_JWK_SET_URI: ${COUPON_AUTH_JWK_SET_URI:-http://192.168.252.2/auth/.well-known/jwks.json}
     depends_on:
       mysql: { condition: service_healthy }
       redis: { condition: service_healthy }

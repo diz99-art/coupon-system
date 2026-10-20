@@ -65,6 +65,12 @@ springdoc:
     path: /swagger-ui.html
 
 coupon:
+  # 인증: 인증 서버가 RS256으로 서명한 액세스 토큰을 공개키로 검증한다 (config/SecurityConfig)
+  auth:
+    # 공개키 목록(JWKS) 주소. 처음 토큰을 검증할 때 받아 5분 캐시하고, 모르는 키 id(kid)가 오면 다시 받는다
+    jwk-set-uri: ${COUPON_AUTH_JWK_SET_URI:http://localhost:8080/auth/.well-known/jwks.json}
+    issuer: platform-auth
+    audience: platform
   kafka:
     topic: coupon-issue
     dead-letter-topic: coupon-issue.DLT

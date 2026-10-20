@@ -6,7 +6,10 @@ import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import java.util.List;
 import lombok.RequiredArgsConstructor;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.GetMapping;
+import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -18,7 +21,15 @@ public class UserCouponController {
 	private final CouponService couponService;
 
 	@Operation(summary = "내 발급 내역 조회",
-			description = "최근 발급 순. DB 기준이라 발급 직후 잠깐은 목록에 없을 수 있다 (Kafka 컨슈머가 저장한 뒤 보인다).")
+			description = "토큰의 사용자. 최근 발급 순. DB 기준이라 발급 직후 잠깐은 목록에 없을 수 있다 (Kafka 컨슈머가 저장한 뒤 보인다).",
+			security = @SecurityRequirement(name = "bearer"))
+	@GetMapping("/users/me/coupons")
+	public List<UserCouponResponse> findMyCoupons(@AuthenticationPrincipal Jwt jwt) {
+		return findUserCoupons(Long.valueOf(jwt.getSubject()));
+	}
+
+	@Operation(summary = "유저 발급 내역 조회 (관리자)", description = "ADMIN만. 다른 사용자의 내역은 관리자만 본다.",
+			security = @SecurityRequirement(name = "bearer"))
 	@GetMapping("/users/{userId}/coupons")
 	public List<UserCouponResponse> findUserCoupons(@PathVariable Long userId) {
 		return couponService.findUserCoupons(userId).stream()
