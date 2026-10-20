@@ -82,7 +82,7 @@ bench/run.sh 2 10000 REDIS_KAFKA                 # k6로 10,000명 동시 요청
 | `test` | 테스트. 전용 Kafka 토픽, 리스너와 스케줄러는 필요한 테스트만 켠다 |
 | `docker` | compose의 앱 컨테이너. 접속 주소는 환경변수, 관리용 포트 8081 |
 | `bench` | 부하 테스트용 비교 API(`/bench`). prod와 함께 켜면 만들어지지 않는다 |
-| `prod` | 배포용. `ddl-auto: validate` + `db/schema.sql`, Swagger 끔, Kafka 복제본 3 |
+| `prod` | 배포용. `ddl-auto: validate` + `db/schema.sql`, Swagger 끔, Kafka 복제본 3 (k3s에서는 환경변수로 Swagger 켬, 복제본 1) |
 
 ## API
 
@@ -862,6 +862,17 @@ EVALSHA (Lua 1번) → 안에서 HMGET(쿠폰 정보), ZSCORE, GET, INCR, ZADD
 2. `cp .env.example .env` → `docker compose up -d --wait mysql redis kafka` (로컬과 **같은 compose 파일**로 MySQL·Redis·Kafka를 띄우고 healthcheck가 통과할 때까지 기다린다)
 3. `./gradlew test`: 실제 MySQL·Redis·Kafka를 쓰는 테스트까지 모두
 4. 실패하면 테스트 보고서를 올리고 컨테이너 로그를 남긴다
+5. **main에 push되고 테스트가 통과하면** `image` job이 ARM64 이미지를 만들어 GHCR에 올린다
+   - `ubuntu-24.04-arm` 러너에서 바로 빌드 (k3s 노드가 ARM64. x86에서 QEMU로 흉내 내면 몇 배 느리다), 약 2분
+   - 이미지: `ghcr.io/diz99-art/coupon-system:<커밋 해시 40자>`. `latest` 같은 움직이는 태그는 붙이지 않는다
+     → 클러스터에 떠 있는 이미지가 정확히 어느 커밋인지 알 수 있고, 되돌릴 때 예전 해시로 다시 배포하면 된다
+   - 로그인은 실행마다 발급되는 `GITHUB_TOKEN`(packages: write)으로 한다. 저장해 둔 비밀번호가 없다
+
+### 쿠버네티스 배포 (k3s)
+
+[platform-infra](https://github.com/diz99-art/platform-infra)의 k3s 클러스터에서 prod 프로필로 2대가 돈다 (MySQL·Redis·Kafka도 클러스터 안).
+설정은 ConfigMap, 비밀번호는 Ansible Vault → Secret. 배포: `cd ansible && ansible-playbook coupon.yml -e coupon_image_tag=<커밋 해시>`.
+자세한 내용은 platform-infra의 `docs/coupon.md`.
 
 ## 트러블슈팅
 
